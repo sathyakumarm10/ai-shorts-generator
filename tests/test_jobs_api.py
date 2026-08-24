@@ -212,3 +212,33 @@ def test_job_status_enum_values_are_plain_strings():
     # behave like ordinary strings (important for JSON serialization).
     assert JobStatus.QUEUED == "queued"
     assert isinstance(JobStatus.QUEUED, str)
+
+
+# ---------------------------------------------------------------------
+# Job service unit tests
+# ---------------------------------------------------------------------
+
+
+def test_job_service_create_and_get_job():
+    import uuid
+    from app.models import VideoJobRequest
+    from app.services import job_service
+
+    request = VideoJobRequest(
+        video_url="https://www.youtube.com/watch?v=example",
+        clip_duration=60,
+        number_of_clips=5,
+    )
+    created = job_service.create_job(request)
+
+    assert created.status == JobStatus.QUEUED
+    assert uuid.UUID(created.job_id, version=4)
+    assert created.job_id in job_service.jobs
+    assert job_service.get_job(created.job_id) == created
+
+
+def test_job_service_get_job_nonexistent_returns_none():
+    from app.services import job_service
+
+    assert job_service.get_job("nonexistent-service-id") is None
+
