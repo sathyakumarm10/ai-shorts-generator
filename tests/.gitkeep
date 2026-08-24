@@ -1,4 +1,0 @@
-This file exists to ensure Git tracks the otherwise empty "tests" directory.
-
-Backend and frontend test suites will be added here as the project develops.
-This placeholder will be removed once real tests are added.

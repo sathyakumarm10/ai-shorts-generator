@@ -1,0 +1,5 @@
+# Additional dependencies needed only for running the test suite.
+# Install with: pip install -r backend/requirements-dev.txt
+-r requirements.txt
+pytest
+httpx
