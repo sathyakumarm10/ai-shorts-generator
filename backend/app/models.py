@@ -8,6 +8,7 @@ API expects and returns without reading through business logic.
 
 from datetime import datetime
 from enum import Enum
+from typing import List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl, TypeAdapter, model_validator
 
@@ -364,6 +365,101 @@ class CaptionTrack(BaseModel):
                     f"Caption segments must not overlap: segment {i} ends at "
                     f"{curr.end_seconds}s but segment {i+1} starts at {next_seg.start_seconds}s"
                 )
+        return self
+
+
+class ShortsGenerationRequest(BaseModel):
+    """Request parameters for orchestrating end-to-end automatic Shorts generation."""
+
+    source: VideoSource = Field(..., description="Source video to ingest and process.")
+    clip_duration_seconds: float = Field(default=60.0, gt=0.0, description="Target duration of each short in seconds.")
+    number_of_clips: int = Field(default=3, gt=0, description="Maximum number of candidate shorts to generate.")
+    min_clip_duration: float = Field(default=30.0, gt=0.0, description="Minimum allowed clip duration in seconds.")
+    max_clip_duration: float = Field(default=120.0, gt=0.0, description="Maximum allowed clip duration in seconds.")
+    vertical_width: int = Field(default=1080, gt=0, description="Target vertical video width in pixels.")
+    vertical_height: int = Field(default=1920, gt=0, description="Target vertical video height in pixels.")
+    include_captions: bool = Field(default=True, description="Whether to generate and burn captions into the output video.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_invalid_bools(cls, data: object) -> object:
+        if isinstance(data, dict):
+            for field_name in ("clip_duration_seconds", "number_of_clips", "min_clip_duration", "max_clip_duration", "vertical_width", "vertical_height"):
+                if isinstance(data.get(field_name), bool):
+                    raise ValueError(f"{field_name} cannot be a boolean value")
+            if "include_captions" in data and not isinstance(data["include_captions"], bool):
+                raise ValueError("include_captions must be a boolean value")
+        return data
+
+    @model_validator(mode="after")
+    def validate_request(self) -> "ShortsGenerationRequest":
+        import math
+
+        for field_name in ("clip_duration_seconds", "min_clip_duration", "max_clip_duration", "vertical_width", "vertical_height", "number_of_clips"):
+            val = getattr(self, field_name)
+            if not math.isfinite(val):
+                raise ValueError(f"{field_name} must be a finite number")
+
+        if self.min_clip_duration > self.max_clip_duration:
+            raise ValueError(
+                f"min_clip_duration ({self.min_clip_duration}s) cannot exceed max_clip_duration ({self.max_clip_duration}s)"
+            )
+        if self.clip_duration_seconds < self.min_clip_duration or self.clip_duration_seconds > self.max_clip_duration:
+            raise ValueError(
+                f"clip_duration_seconds ({self.clip_duration_seconds}s) must be between "
+                f"min_clip_duration ({self.min_clip_duration}s) and max_clip_duration ({self.max_clip_duration}s)"
+            )
+        if self.number_of_clips < 1:
+            raise ValueError("number_of_clips must be at least 1")
+
+        ratio = self.vertical_width / self.vertical_height
+        target_ratio = 9.0 / 16.0
+        if abs(ratio - target_ratio) > 0.01:
+            raise ValueError(
+                f"Aspect ratio {self.vertical_width}:{self.vertical_height} does not match 9:16 ({target_ratio:.4f})"
+            )
+        return self
+
+
+class GeneratedShort(BaseModel):
+    """Represents a fully generated Short video artifact through the rendering pipeline."""
+
+    index: int = Field(..., ge=1, description="1-based sequential ranking index.")
+    candidate: HighlightCandidate = Field(..., description="The highlight candidate used for this short.")
+    source_clip_path: str = Field(..., min_length=1, description="File path to the initial trimmed clip.")
+    vertical_clip_path: str = Field(..., min_length=1, description="File path to the 9:16 vertical video.")
+    captioned_clip_path: Optional[str] = Field(default=None, description="File path to the captioned video (if captions requested).")
+    final_file_path: str = Field(..., min_length=1, description="File path to the final output video deliverable.")
+
+    @model_validator(mode="after")
+    def validate_paths(self) -> "GeneratedShort":
+        for path_field in ("source_clip_path", "vertical_clip_path", "final_file_path"):
+            val = getattr(self, path_field)
+            if not val or not val.strip():
+                raise ValueError(f"{path_field} cannot be empty or whitespace only")
+        if self.captioned_clip_path is not None and not self.captioned_clip_path.strip():
+            raise ValueError("captioned_clip_path cannot be whitespace only when provided")
+        return self
+
+
+class ShortsGenerationResult(BaseModel):
+    """Complete output payload from the ShortsGenerationService pipeline."""
+
+    source_video: IngestedVideo = Field(..., description="Ingested original source video.")
+    metadata: VideoMetadata = Field(..., description="Extracted video metadata.")
+    transcript: TimestampedTranscript = Field(..., description="Timestamped transcription of speech.")
+    candidates: list[HighlightCandidate] = Field(..., description="Ranked highlight candidates detected.")
+    generated_shorts: list[GeneratedShort] = Field(..., description="Final rendered short videos.")
+
+    @model_validator(mode="after")
+    def validate_result_shorts(self) -> "ShortsGenerationResult":
+        seen_indices = set()
+        for idx, short in enumerate(self.generated_shorts, start=1):
+            if short.index in seen_indices:
+                raise ValueError(f"Duplicate short index detected: {short.index}")
+            seen_indices.add(short.index)
+            if short.index != idx:
+                raise ValueError(f"Generated short index {short.index} must be sequential 1-based (expected {idx})")
         return self
 
 
