@@ -284,6 +284,41 @@ class GeneratedHighlightClip(BaseModel):
         return self
 
 
+class VerticalVideoRequest(BaseModel):
+    """Request parameters for converting a video clip into a 9:16 vertical format."""
+
+    width: int = Field(default=1080, gt=0, description="Target width in pixels (must be positive).")
+    height: int = Field(default=1920, gt=0, description="Target height in pixels (must be positive).")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_bools(cls, data: object) -> object:
+        if isinstance(data, dict):
+            if isinstance(data.get("width"), bool) or isinstance(data.get("height"), bool):
+                raise ValueError("width and height cannot be boolean values")
+        elif hasattr(data, "width") and hasattr(data, "height"):
+            if isinstance(getattr(data, "width"), bool) or isinstance(getattr(data, "height"), bool):
+                raise ValueError("width and height cannot be boolean values")
+        return data
+
+    @model_validator(mode="after")
+    def validate_aspect_ratio(self) -> "VerticalVideoRequest":
+        import math
+
+        if not math.isfinite(self.width) or not math.isfinite(self.height):
+            raise ValueError("width and height must be finite numbers")
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("width and height must be strictly positive")
+
+        ratio = self.width / self.height
+        target_ratio = 9.0 / 16.0
+        if abs(ratio - target_ratio) > 0.01:
+            raise ValueError(
+                f"Aspect ratio {self.width}:{self.height} ({ratio:.4f}) does not match 9:16 ({target_ratio:.4f})"
+            )
+        return self
+
+
 class VideoJobRequest(BaseModel):
     """Request body for creating a new video processing job.
 
