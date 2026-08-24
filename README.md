@@ -51,23 +51,80 @@ Future planned capabilities (not yet implemented) include:
 
 ## Current Development Stage
 
-This repository currently contains only the **initial project scaffolding**:
+The backend API and core ingestion/inspection services are under active development:
 
-- `backend/app/__init__.py` — placeholder for the future FastAPI application
-  package.
-- `frontend/` — empty directory reserved for the future frontend
-  application.
-- `tests/` — empty directory reserved for future automated tests.
-- `.gitignore` — repository ignore rules covering Python, FastAPI, React,
-  TypeScript, Node.js, editor/IDE files, temporary files, uploads, generated
-  media, build artifacts, and local environment files.
-
-No application features have been implemented yet. Subsequent work will
-build out the backend API, frontend interface, and processing pipelines
-described above incrementally.
+- `backend/app/main.py` — FastAPI application providing job creation and job status endpoints.
+- `backend/app/models.py` — Pydantic models for `VideoSource`, `JobStatus`, `VideoJobRequest`, `VideoJobResponse`, `IngestedVideo`, and `VideoMetadata`.
+- `backend/app/services/job_service.py` — Job management and in-memory job store.
+- `backend/app/services/video_ingestion_service.py` — Video ingestion abstraction and single-video YouTube download integration via `yt-dlp`.
+- `backend/app/services/video_metadata_service.py` — Media metadata extraction (duration, dimensions, format, file size) via `ffprobe`.
+- `backend/app/services/media_tools_service.py` — Health-check service for external tool availability (`ffmpeg`, `ffprobe`, `yt-dlp`).
+- `tests/` — Automated test suite with unit tests and mocked integration tests.
 
 ## Getting Started
 
-There is currently nothing to run — this stage only establishes the
-repository structure. Setup and usage instructions will be added here as
-the backend and frontend applications are scaffolded and implemented.
+### 1. Python Environment Setup
+
+1. Create and activate a Python virtual environment:
+   ```powershell
+   python -m venv backend/venv
+   .\backend\venv\Scripts\Activate.ps1
+   ```
+2. Install Python dependencies:
+   ```powershell
+   pip install -r backend/requirements.txt
+   pip install -r backend/requirements-dev.txt
+   ```
+
+### 2. External Media Dependencies (FFmpeg and ffprobe)
+
+Video metadata inspection and subsequent video processing (cutting, filtering, transcoding) require **FFmpeg** and **ffprobe** system binaries to be installed and available on your system `PATH`.
+
+> **Important:** FFmpeg binaries are external system tools and must **not** be bundled into or committed to this repository.
+
+#### Windows Installation Options
+
+Choose one of the following trusted installation methods:
+
+* **Option A: Via WinGet (Recommended)**
+  Open PowerShell as Administrator or regular user and run:
+  ```powershell
+  winget install Gyan.FFmpeg
+  ```
+  *(or `winget install "FFmpeg (Essentials Build)"`)*
+
+* **Option B: Via Chocolatey**
+  ```powershell
+  choco install ffmpeg
+  ```
+
+* **Option C: Via Scoop**
+  ```powershell
+  scoop install ffmpeg
+  ```
+
+* **Option D: Manual Download from Official Builds**
+  1. Download a release build (e.g. from [gyan.dev FFmpeg Builds](https://www.gyan.dev/ffmpeg/builds/) or [BtbN FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases), trusted resources linked on [ffmpeg.org](https://ffmpeg.org/download.html)).
+  2. Extract the archive to a local folder (e.g. `C:\ffmpeg`).
+  3. Add the `bin` directory containing `ffmpeg.exe` and `ffprobe.exe` to your Windows User or System `PATH` environment variable.
+  4. Restart your terminal session for the `PATH` change to take effect.
+
+#### Verifying Installation
+
+Verify that both tools are discoverable in a new terminal session:
+
+```powershell
+ffmpeg -version
+ffprobe -version
+```
+
+Both commands should display version information without command-not-found errors.
+
+### 3. Running Tests
+
+Run the complete test suite:
+
+```powershell
+.\backend\venv\Scripts\python.exe -m pytest tests -q
+```
+
