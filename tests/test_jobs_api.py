@@ -395,24 +395,117 @@ def test_ingested_video_empty_path_rejected():
         IngestedVideo(file_path="")
 
 
-def test_ingestion_service_accepts_video_source_contract():
-    import pytest
+def test_youtube_ingestion_successful(monkeypatch, tmp_path):
+    from pathlib import Path
     from app.services.video_ingestion_service import VideoIngestionService
 
-    service = VideoIngestionService()
+    service = VideoIngestionService(download_dir=tmp_path)
     youtube_source = VideoSource(
         type=VideoSourceType.YOUTUBE,
         location="https://www.youtube.com/watch?v=example",
     )
+
+    fake_video_file = tmp_path / "yt_test123.mp4"
+
+    class FakeYoutubeDL:
+        def __init__(self, params=None):
+            self.params = params or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        def extract_info(self, url, download=True):
+            assert url == "https://www.youtube.com/watch?v=example"
+            # Simulate downloaded file created on disk
+            fake_video_file.write_text("fake video content")
+            return {"id": "example", "ext": "mp4"}
+
+        def prepare_filename(self, info_dict):
+            return str(fake_video_file)
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYoutubeDL)
+
+    ingested = service.ingest(youtube_source)
+    assert ingested.file_path == str(fake_video_file)
+    assert Path(ingested.file_path).is_file()
+
+
+def test_youtube_ingestion_failure_raises_video_ingestion_error(monkeypatch, tmp_path):
+    import pytest
+    from app.services.video_ingestion_service import VideoIngestionError, VideoIngestionService
+
+    service = VideoIngestionService(download_dir=tmp_path)
+    youtube_source = VideoSource(
+        type=VideoSourceType.YOUTUBE,
+        location="https://www.youtube.com/watch?v=example",
+    )
+
+    class FailingYoutubeDL:
+        def __init__(self, params=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        def extract_info(self, url, download=True):
+            raise RuntimeError("Network timeout connecting to video host")
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", FailingYoutubeDL)
+
+    with pytest.raises(VideoIngestionError, match="Failed to download YouTube video"):
+        service.ingest(youtube_source)
+
+
+def test_youtube_ingestion_missing_output_file_raises_error(monkeypatch, tmp_path):
+    import pytest
+    from app.services.video_ingestion_service import VideoIngestionError, VideoIngestionService
+
+    service = VideoIngestionService(download_dir=tmp_path)
+    youtube_source = VideoSource(
+        type=VideoSourceType.YOUTUBE,
+        location="https://www.youtube.com/watch?v=example",
+    )
+
+    class MissingFileYoutubeDL:
+        def __init__(self, params=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        def extract_info(self, url, download=True):
+            # Extract info returns success but does not create the file
+            return {"id": "example", "ext": "mp4"}
+
+        def prepare_filename(self, info_dict):
+            return str(tmp_path / "nonexistent.mp4")
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", MissingFileYoutubeDL)
+
+    with pytest.raises(VideoIngestionError, match="expected video file was not found"):
+        service.ingest(youtube_source)
+
+
+def test_upload_ingestion_remains_not_implemented(tmp_path):
+    import pytest
+    from app.services.video_ingestion_service import VideoIngestionService
+
+    service = VideoIngestionService(download_dir=tmp_path)
     upload_source = VideoSource(
         type=VideoSourceType.UPLOAD,
         location="/local/path/video.mp4",
     )
 
-    # Ingestion logic is not implemented yet, so the service explicitly raises NotImplementedError
-    with pytest.raises(NotImplementedError, match="YouTube video ingestion is not implemented yet"):
-        service.ingest(youtube_source)
-
     with pytest.raises(NotImplementedError, match="Upload video ingestion is not implemented yet"):
         service.ingest(upload_source)
+
 

@@ -1,14 +1,20 @@
-"""Video ingestion service abstraction.
+"""Video ingestion service.
 
-This module defines the service interface and domain exceptions for converting
-a `VideoSource` (YouTube link, uploaded file reference, etc.) into a locally
-accessible `IngestedVideo` reference for subsequent processing.
-
-Actual downloading, network calls, file uploading, and processing are not
-implemented yet and will be added in future stages.
+This module provides the `VideoIngestionService` responsible for acquiring
+source videos (e.g. from YouTube or local uploads) and making them available
+locally as `IngestedVideo` objects containing validated local file paths.
 """
 
+from pathlib import Path
+from uuid import uuid4
+
+import yt_dlp
+
 from app.models import IngestedVideo, VideoSource, VideoSourceType
+
+# Default storage directory for downloaded source videos.
+# Defaults to `downloads/sources` at project root level (ignored by git).
+DEFAULT_DOWNLOAD_DIR = Path("downloads") / "sources"
 
 
 class VideoIngestionError(Exception):
@@ -18,11 +24,49 @@ class VideoIngestionError(Exception):
 
 
 class VideoIngestionService:
-    """Service abstraction responsible for ingesting video sources into local files.
+    """Service responsible for ingesting video sources into local files.
 
-    Given a `VideoSource`, implementations or methods ingest the content
-    and produce an `IngestedVideo` model containing the local file path.
+    Given a `VideoSource`, this service ingests the video content and produces
+    an `IngestedVideo` model containing the local file path.
     """
+
+    def __init__(self, download_dir: Path | str = DEFAULT_DOWNLOAD_DIR) -> None:
+        self.download_dir = Path(download_dir)
+
+    def _ingest_youtube(self, location: str) -> IngestedVideo:
+        """Download a single YouTube video using yt-dlp.
+
+        Only legitimate, user-authorized single-video processing is supported.
+        No cookies, credentials, playlists, or channels are processed.
+        """
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        # Generate a safe, unique filename base to avoid collision or path traversal
+        unique_id = uuid4().hex
+        output_template = str(self.download_dir / f"yt_{unique_id}.%(ext)s")
+
+        ydl_opts = {
+            "outtmpl": output_template,
+            # Select best single file with video+audio, or best video+best audio fallback
+            "format": "best[ext=mp4]/bestvideo+bestaudio/best",
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "no_color": True,
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(location, download=True)
+                downloaded_file = Path(ydl.prepare_filename(info))
+        except Exception as exc:
+            raise VideoIngestionError(f"Failed to download YouTube video: {exc}") from exc
+
+        if not downloaded_file.is_file():
+            raise VideoIngestionError(
+                f"Ingestion reported success, but expected video file was not found: {downloaded_file}"
+            )
+
+        return IngestedVideo(file_path=str(downloaded_file))
 
     def ingest(self, source: VideoSource) -> IngestedVideo:
         """Ingest a video source and produce an IngestedVideo reference.
@@ -34,17 +78,13 @@ class VideoIngestionService:
             IngestedVideo: Contains the local file path to the ingested video.
 
         Raises:
-            VideoIngestionError: If the source type cannot be ingested.
-            NotImplementedError: For source types where ingestion logic is not yet built.
+            VideoIngestionError: If download fails or the source type is unsupported.
+            NotImplementedError: If ingestion for the source type is not implemented yet.
         """
         if source.type == VideoSourceType.YOUTUBE:
-            # YouTube downloading requires external download capabilities (e.g. yt-dlp/pytube),
-            # which are intentionally not implemented yet.
-            raise NotImplementedError(
-                "YouTube video ingestion is not implemented yet."
-            )
+            return self._ingest_youtube(source.location)
         elif source.type == VideoSourceType.UPLOAD:
-            # Upload handling / local validation is not yet implemented.
+            # Upload handling is not yet implemented.
             raise NotImplementedError(
                 "Upload video ingestion is not implemented yet."
             )
