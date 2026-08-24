@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 
-from app.models import VideoJobRequest, VideoJobResponse
+from app.models import JobStatus, VideoJobRequest, VideoJobResponse
 
 # Create the FastAPI application instance.
 app = FastAPI(title="AI Shorts Generator API")
@@ -50,7 +50,7 @@ def create_job(request: VideoJobRequest) -> VideoJobResponse:
     """
     job = VideoJobResponse(
         job_id=str(uuid4()),
-        status="queued",
+        status=JobStatus.QUEUED,
         video_url=request.video_url,
         clip_duration=request.clip_duration,
         number_of_clips=request.number_of_clips,

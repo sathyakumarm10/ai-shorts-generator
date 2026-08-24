@@ -7,6 +7,7 @@ endpoints continue to work after adding the new job creation endpoint.
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models import JobStatus
 
 client = TestClient(app)
 
@@ -190,3 +191,24 @@ def test_get_nonexistent_job_returns_404():
     response = client.get("/api/jobs/nonexistent-id")
     assert response.status_code == 404
     assert response.json() == {"detail": "Job not found"}
+
+
+# ---------------------------------------------------------------------
+# JobStatus enum
+# ---------------------------------------------------------------------
+
+
+def test_job_status_enum_contains_exactly_the_four_allowed_statuses():
+    assert {member.value for member in JobStatus} == {
+        "queued",
+        "processing",
+        "completed",
+        "failed",
+    }
+
+
+def test_job_status_enum_values_are_plain_strings():
+    # JobStatus inherits from str, so members should compare equal to and
+    # behave like ordinary strings (important for JSON serialization).
+    assert JobStatus.QUEUED == "queued"
+    assert isinstance(JobStatus.QUEUED, str)

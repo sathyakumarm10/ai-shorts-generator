@@ -7,8 +7,31 @@ API expects and returns without reading through business logic.
 """
 
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel, Field, HttpUrl
+
+
+class JobStatus(str, Enum):
+    """Controlled set of allowed values for a job's status.
+
+    Using an enum instead of a plain string prevents typos or unexpected
+    values (e.g. "Queued" or "done") from ever being stored or returned by
+    the API. Inheriting from both `str` and `Enum` means each member behaves
+    like a normal string at runtime, so FastAPI/Pydantic serialize it as a
+    plain JSON string (e.g. "queued") rather than something like
+    "JobStatus.QUEUED".
+
+    Only job creation (status starts as QUEUED) is implemented so far.
+    Transitioning a job between statuses (e.g. to PROCESSING, COMPLETED, or
+    FAILED) will be added in a later stage once actual video processing
+    exists.
+    """
+
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class VideoJobRequest(BaseModel):
@@ -46,7 +69,7 @@ class VideoJobResponse(BaseModel):
     """
 
     job_id: str = Field(..., description="Unique identifier for the job (UUID4).")
-    status: str = Field(..., description="Current status of the job, e.g. 'queued'.")
+    status: JobStatus = Field(..., description="Current status of the job.")
     video_url: HttpUrl
     clip_duration: int
     number_of_clips: int
