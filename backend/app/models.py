@@ -9,7 +9,7 @@ API expects and returns without reading through business logic.
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, TypeAdapter, model_validator
 
 
 class JobStatus(str, Enum):
@@ -32,6 +32,47 @@ class JobStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class VideoSourceType(str, Enum):
+    """Controlled set of allowed video source types.
+
+    Specifies where the source video originates from.
+    """
+
+    YOUTUBE = "youtube"
+    UPLOAD = "upload"
+
+
+class VideoSource(BaseModel):
+    """Represents the origin of a source video without performing processing.
+
+    - For `youtube` sources, `location` must be a valid HTTP or HTTPS URL.
+    - For `upload` sources, `location` must be a non-empty string representing
+      a local file path/reference.
+    """
+
+    type: VideoSourceType = Field(..., description="The type of video source (youtube or upload).")
+    location: str = Field(..., min_length=1, description="The URL or file reference for the source video.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_source(cls, data: object) -> object:
+        if isinstance(data, dict):
+            source_type = data.get("type")
+            location = data.get("location")
+            if source_type == VideoSourceType.YOUTUBE or source_type == VideoSourceType.YOUTUBE.value:
+                if location is not None:
+                    TypeAdapter(HttpUrl).validate_python(location)
+        elif hasattr(data, "type") and hasattr(data, "location"):
+            source_type = getattr(data, "type")
+            location = getattr(data, "location")
+            if source_type == VideoSourceType.YOUTUBE or source_type == VideoSourceType.YOUTUBE.value:
+                if location is not None:
+                    TypeAdapter(HttpUrl).validate_python(location)
+        return data
+
+
 
 
 class VideoJobRequest(BaseModel):

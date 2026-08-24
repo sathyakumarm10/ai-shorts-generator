@@ -242,3 +242,85 @@ def test_job_service_get_job_nonexistent_returns_none():
 
     assert job_service.get_job("nonexistent-service-id") is None
 
+
+# ---------------------------------------------------------------------
+# VideoSource & VideoSourceType unit tests
+# ---------------------------------------------------------------------
+
+
+def test_video_source_type_enum_members():
+    from app.models import VideoSourceType
+
+    assert {member.value for member in VideoSourceType} == {"youtube", "upload"}
+    assert VideoSourceType.YOUTUBE == "youtube"
+    assert VideoSourceType.UPLOAD == "upload"
+    assert isinstance(VideoSourceType.YOUTUBE, str)
+
+
+def test_valid_youtube_video_source():
+    from app.models import VideoSource, VideoSourceType
+
+    source = VideoSource(
+        type=VideoSourceType.YOUTUBE,
+        location="https://www.youtube.com/watch?v=12345",
+    )
+    assert source.type == VideoSourceType.YOUTUBE
+    assert source.location == "https://www.youtube.com/watch?v=12345"
+
+
+def test_valid_upload_video_source():
+    from app.models import VideoSource, VideoSourceType
+
+    source = VideoSource(
+        type=VideoSourceType.UPLOAD,
+        location="/path/to/local/video.mp4",
+    )
+    assert source.type == VideoSourceType.UPLOAD
+    assert source.location == "/path/to/local/video.mp4"
+
+
+def test_video_source_missing_type_rejected():
+    import pytest
+    from pydantic import ValidationError
+    from app.models import VideoSource
+
+    with pytest.raises(ValidationError):
+        VideoSource.model_validate({"location": "https://www.youtube.com/watch?v=test"})
+
+
+def test_video_source_missing_location_rejected():
+    import pytest
+    from pydantic import ValidationError
+    from app.models import VideoSource, VideoSourceType
+
+    with pytest.raises(ValidationError):
+        VideoSource.model_validate({"type": VideoSourceType.YOUTUBE})
+
+
+def test_video_source_unsupported_type_rejected():
+    import pytest
+    from pydantic import ValidationError
+    from app.models import VideoSource
+
+    with pytest.raises(ValidationError):
+        VideoSource.model_validate({"type": "vimeo", "location": "https://vimeo.com/123"})
+
+
+def test_video_source_invalid_youtube_url_rejected():
+    import pytest
+    from pydantic import ValidationError
+    from app.models import VideoSource, VideoSourceType
+
+    with pytest.raises(ValidationError):
+        VideoSource(type=VideoSourceType.YOUTUBE, location="not-a-valid-url")
+
+
+def test_video_source_empty_upload_location_rejected():
+    import pytest
+    from pydantic import ValidationError
+    from app.models import VideoSource, VideoSourceType
+
+    with pytest.raises(ValidationError):
+        VideoSource(type=VideoSourceType.UPLOAD, location="")
+
+
