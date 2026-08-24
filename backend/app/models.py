@@ -211,6 +211,63 @@ class TimestampedTranscript(BaseModel):
         return self
 
 
+class HighlightScore(BaseModel):
+    """Represents multi-dimensional interest scoring for a transcript segment or candidate.
+
+    All score values are normalized floating-point numbers between 0.0 and 1.0 inclusive.
+    """
+
+    overall: float = Field(..., ge=0.0, le=1.0, description="Overall weighted highlight score (0.0 to 1.0).")
+    hook: float = Field(..., ge=0.0, le=1.0, description="Attention-grabbing hook strength score (0.0 to 1.0).")
+    emotion: float = Field(..., ge=0.0, le=1.0, description="Emotional intensity score (0.0 to 1.0).")
+    curiosity: float = Field(..., ge=0.0, le=1.0, description="Curiosity and inquiry score (0.0 to 1.0).")
+    information_density: float = Field(..., ge=0.0, le=1.0, description="Informational value density score (0.0 to 1.0).")
+
+    @model_validator(mode="after")
+    def validate_finite_scores(self) -> "HighlightScore":
+        import math
+
+        for field_name in ("overall", "hook", "emotion", "curiosity", "information_density"):
+            val = getattr(self, field_name)
+            if not math.isfinite(val):
+                raise ValueError(f"{field_name} must be a finite number between 0.0 and 1.0")
+        return self
+
+
+class HighlightCandidate(BaseModel):
+    """Represents a potential short-form video clip candidate window derived from transcript segments.
+
+    Timestamps strictly originate from boundary transcript segments.
+    """
+
+    start_seconds: float = Field(..., ge=0.0, description="Start timestamp of the candidate window in seconds.")
+    end_seconds: float = Field(..., gt=0.0, description="End timestamp of the candidate window in seconds.")
+    duration_seconds: float = Field(..., gt=0.0, description="Duration of the candidate window in seconds.")
+    text: str = Field(..., min_length=1, description="Concatenated transcript text within this candidate window.")
+    score: HighlightScore = Field(..., description="Calculated multi-dimensional highlight score.")
+
+    @model_validator(mode="after")
+    def validate_candidate(self) -> "HighlightCandidate":
+        import math
+
+        if not math.isfinite(self.start_seconds):
+            raise ValueError("start_seconds must be a finite number")
+        if not math.isfinite(self.end_seconds):
+            raise ValueError("end_seconds must be a finite number")
+        if not math.isfinite(self.duration_seconds):
+            raise ValueError("duration_seconds must be a finite number")
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("end_seconds must be strictly greater than start_seconds")
+        expected_duration = self.end_seconds - self.start_seconds
+        if abs(self.duration_seconds - expected_duration) > 1e-3:
+            raise ValueError(
+                f"duration_seconds ({self.duration_seconds}s) does not match end_seconds - start_seconds ({expected_duration}s)"
+            )
+        if not self.text or not self.text.strip():
+            raise ValueError("text cannot be empty or whitespace only")
+        return self
+
+
 class VideoJobRequest(BaseModel):
     """Request body for creating a new video processing job.
 
