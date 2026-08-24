@@ -1,0 +1,4 @@
+This file exists to ensure Git tracks the otherwise empty "frontend" directory.
+
+The frontend application (React/TypeScript) has not been scaffolded yet.
+This placeholder will be removed once the frontend project is initialized.

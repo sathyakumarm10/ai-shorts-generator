@@ -1,0 +1,167 @@
+# =====================================================================
+# AI Shorts Generator - .gitignore
+# Covers: Python, FastAPI, React, TypeScript, Node.js, VS Code, temp
+# files, uploaded files, generated videos, build files, caches, and
+# local development environment files.
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# Environment variables / secrets - NEVER commit these
+# ---------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.env
+.envrc
+secrets.json
+credentials.json
+*.pem
+*.key
+*.crt
+
+# ---------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing / coverage
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+htmlcov/
+
+# Type checkers / linters
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints
+
+# ---------------------------------------------------------------------
+# FastAPI / backend specific
+# ---------------------------------------------------------------------
+instance/
+*.sqlite3
+*.db
+
+# ---------------------------------------------------------------------
+# Node.js / React / TypeScript (frontend)
+# ---------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+.vite/
+.turbo/
+*.tsbuildinfo
+
+# ---------------------------------------------------------------------
+# Temporary files, uploads, and generated media
+# ---------------------------------------------------------------------
+tmp/
+temp/
+*.tmp
+*.temp
+uploads/
+output/
+outputs/
+generated/
+media/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.mp3
+*.wav
+
+# ---------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------
+logs/
+*.log
+
+# ---------------------------------------------------------------------
+# OS-specific files
+# ---------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------
+# Editors / IDEs
+# ---------------------------------------------------------------------
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*~
+
+# ---------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------
+*.bak
+*.orig
