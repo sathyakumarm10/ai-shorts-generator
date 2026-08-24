@@ -7,12 +7,16 @@ endpoints continue to work after adding the new job creation endpoint.
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models import JobStatus
+from app.models import JobStatus, VideoJobRequest, VideoSource, VideoSourceType
+from app.services import job_service
 
 client = TestClient(app)
 
 VALID_PAYLOAD = {
-    "video_url": "https://www.youtube.com/watch?v=example",
+    "source": {
+        "type": "youtube",
+        "location": "https://www.youtube.com/watch?v=example",
+    },
     "clip_duration": 60,
     "number_of_clips": 5,
 }
@@ -47,7 +51,7 @@ def test_health_check_still_works():
 # ---------------------------------------------------------------------
 
 
-def test_create_job_with_valid_request_returns_expected_shape():
+def test_create_job_with_valid_youtube_request_returns_expected_shape():
     response = client.post("/api/jobs", json=VALID_PAYLOAD)
     assert response.status_code == 200
 
@@ -55,13 +59,16 @@ def test_create_job_with_valid_request_returns_expected_shape():
     assert set(body.keys()) == {
         "job_id",
         "status",
-        "video_url",
+        "source",
         "clip_duration",
         "number_of_clips",
         "created_at",
     }
     assert body["status"] == "queued"
-    assert body["video_url"] == VALID_PAYLOAD["video_url"]
+    assert body["source"] == {
+        "type": "youtube",
+        "location": "https://www.youtube.com/watch?v=example",
+    }
     assert body["clip_duration"] == VALID_PAYLOAD["clip_duration"]
     assert body["number_of_clips"] == VALID_PAYLOAD["number_of_clips"]
     # job_id should be a valid UUID4 string.
@@ -72,6 +79,27 @@ def test_create_job_with_valid_request_returns_expected_shape():
     from datetime import datetime
 
     datetime.fromisoformat(body["created_at"])
+
+
+def test_create_job_with_valid_upload_request():
+    upload_payload = {
+        "source": {
+            "type": "upload",
+            "location": "/uploads/user_video.mp4",
+        },
+        "clip_duration": 45,
+        "number_of_clips": 3,
+    }
+    response = client.post("/api/jobs", json=upload_payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["source"] == {
+        "type": "upload",
+        "location": "/uploads/user_video.mp4",
+    }
+    assert body["clip_duration"] == 45
+    assert body["number_of_clips"] == 3
 
 
 def test_create_job_returns_unique_job_ids():
@@ -140,23 +168,55 @@ def test_number_of_clips_above_maximum_rejected():
 
 
 # ---------------------------------------------------------------------
-# Other validation cases
+# Other validation cases for POST /api/jobs
 # ---------------------------------------------------------------------
 
 
-def test_missing_required_field_rejected():
-    incomplete_payload = {"clip_duration": 60, "number_of_clips": 5}
-    response = client.post("/api/jobs", json=incomplete_payload)
+def test_missing_source_rejected():
+    payload = {"clip_duration": 60, "number_of_clips": 5}
+    response = client.post("/api/jobs", json=payload)
     assert response.status_code == 422
 
 
-def test_invalid_video_url_rejected():
-    response = client.post("/api/jobs", json=_payload(video_url="not-a-valid-url"))
+def test_missing_clip_duration_rejected():
+    payload = {
+        "source": {
+            "type": "youtube",
+            "location": "https://www.youtube.com/watch?v=example",
+        },
+        "number_of_clips": 5,
+    }
+    response = client.post("/api/jobs", json=payload)
     assert response.status_code == 422
 
 
-def test_empty_video_url_rejected():
-    response = client.post("/api/jobs", json=_payload(video_url=""))
+def test_missing_number_of_clips_rejected():
+    payload = {
+        "source": {
+            "type": "youtube",
+            "location": "https://www.youtube.com/watch?v=example",
+        },
+        "clip_duration": 60,
+    }
+    response = client.post("/api/jobs", json=payload)
+    assert response.status_code == 422
+
+
+def test_invalid_source_type_rejected():
+    payload = _payload(source={"type": "vimeo", "location": "https://vimeo.com/123"})
+    response = client.post("/api/jobs", json=payload)
+    assert response.status_code == 422
+
+
+def test_invalid_youtube_url_rejected():
+    payload = _payload(source={"type": "youtube", "location": "not-a-valid-url"})
+    response = client.post("/api/jobs", json=payload)
+    assert response.status_code == 422
+
+
+def test_empty_upload_location_rejected():
+    payload = _payload(source={"type": "upload", "location": ""})
+    response = client.post("/api/jobs", json=payload)
     assert response.status_code == 422
 
 
@@ -179,7 +239,7 @@ def test_get_job_returns_created_job():
     assert fetched_job["status"] == "queued"
     assert fetched_job["clip_duration"] == VALID_PAYLOAD["clip_duration"]
     assert fetched_job["number_of_clips"] == VALID_PAYLOAD["number_of_clips"]
-    assert fetched_job["video_url"] == VALID_PAYLOAD["video_url"]
+    assert fetched_job["source"] == VALID_PAYLOAD["source"]
 
 
 # ---------------------------------------------------------------------
@@ -221,11 +281,12 @@ def test_job_status_enum_values_are_plain_strings():
 
 def test_job_service_create_and_get_job():
     import uuid
-    from app.models import VideoJobRequest
-    from app.services import job_service
 
     request = VideoJobRequest(
-        video_url="https://www.youtube.com/watch?v=example",
+        source=VideoSource(
+            type=VideoSourceType.YOUTUBE,
+            location="https://www.youtube.com/watch?v=example",
+        ),
         clip_duration=60,
         number_of_clips=5,
     )
@@ -233,13 +294,13 @@ def test_job_service_create_and_get_job():
 
     assert created.status == JobStatus.QUEUED
     assert uuid.UUID(created.job_id, version=4)
+    assert created.source.type == VideoSourceType.YOUTUBE
+    assert created.source.location == "https://www.youtube.com/watch?v=example"
     assert created.job_id in job_service.jobs
     assert job_service.get_job(created.job_id) == created
 
 
 def test_job_service_get_job_nonexistent_returns_none():
-    from app.services import job_service
-
     assert job_service.get_job("nonexistent-service-id") is None
 
 
@@ -249,8 +310,6 @@ def test_job_service_get_job_nonexistent_returns_none():
 
 
 def test_video_source_type_enum_members():
-    from app.models import VideoSourceType
-
     assert {member.value for member in VideoSourceType} == {"youtube", "upload"}
     assert VideoSourceType.YOUTUBE == "youtube"
     assert VideoSourceType.UPLOAD == "upload"
@@ -258,8 +317,6 @@ def test_video_source_type_enum_members():
 
 
 def test_valid_youtube_video_source():
-    from app.models import VideoSource, VideoSourceType
-
     source = VideoSource(
         type=VideoSourceType.YOUTUBE,
         location="https://www.youtube.com/watch?v=12345",
@@ -269,8 +326,6 @@ def test_valid_youtube_video_source():
 
 
 def test_valid_upload_video_source():
-    from app.models import VideoSource, VideoSourceType
-
     source = VideoSource(
         type=VideoSourceType.UPLOAD,
         location="/path/to/local/video.mp4",
@@ -282,7 +337,6 @@ def test_valid_upload_video_source():
 def test_video_source_missing_type_rejected():
     import pytest
     from pydantic import ValidationError
-    from app.models import VideoSource
 
     with pytest.raises(ValidationError):
         VideoSource.model_validate({"location": "https://www.youtube.com/watch?v=test"})
@@ -291,7 +345,6 @@ def test_video_source_missing_type_rejected():
 def test_video_source_missing_location_rejected():
     import pytest
     from pydantic import ValidationError
-    from app.models import VideoSource, VideoSourceType
 
     with pytest.raises(ValidationError):
         VideoSource.model_validate({"type": VideoSourceType.YOUTUBE})
@@ -300,7 +353,6 @@ def test_video_source_missing_location_rejected():
 def test_video_source_unsupported_type_rejected():
     import pytest
     from pydantic import ValidationError
-    from app.models import VideoSource
 
     with pytest.raises(ValidationError):
         VideoSource.model_validate({"type": "vimeo", "location": "https://vimeo.com/123"})
@@ -309,7 +361,6 @@ def test_video_source_unsupported_type_rejected():
 def test_video_source_invalid_youtube_url_rejected():
     import pytest
     from pydantic import ValidationError
-    from app.models import VideoSource, VideoSourceType
 
     with pytest.raises(ValidationError):
         VideoSource(type=VideoSourceType.YOUTUBE, location="not-a-valid-url")
@@ -318,9 +369,6 @@ def test_video_source_invalid_youtube_url_rejected():
 def test_video_source_empty_upload_location_rejected():
     import pytest
     from pydantic import ValidationError
-    from app.models import VideoSource, VideoSourceType
 
     with pytest.raises(ValidationError):
         VideoSource(type=VideoSourceType.UPLOAD, location="")
-
-

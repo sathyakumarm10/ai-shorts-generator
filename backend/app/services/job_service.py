@@ -26,7 +26,7 @@ def create_job(request: VideoJobRequest) -> VideoJobResponse:
     job = VideoJobResponse(
         job_id=str(uuid4()),
         status=JobStatus.QUEUED,
-        video_url=request.video_url,
+        source=request.source,
         clip_duration=request.clip_duration,
         number_of_clips=request.number_of_clips,
         created_at=datetime.now(timezone.utc),
@@ -41,3 +41,4 @@ def get_job(job_id: str) -> Optional[VideoJobResponse]:
     Returns the VideoJobResponse if found, or None if the job does not exist.
     """
     return jobs.get(job_id)
+

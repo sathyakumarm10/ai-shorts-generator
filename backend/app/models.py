@@ -79,14 +79,14 @@ class VideoJobRequest(BaseModel):
     """Request body for creating a new video processing job.
 
     FastAPI + Pydantic automatically validate incoming JSON against this
-    model. If validation fails (e.g. an out-of-range value or a missing
-    field), FastAPI returns an HTTP 422 response before our route code
-    even runs.
+    model. If validation fails (e.g. an out-of-range value, invalid source,
+    or a missing field), FastAPI returns an HTTP 422 response before our
+    route code even runs.
     """
 
-    video_url: HttpUrl = Field(
+    source: VideoSource = Field(
         ...,
-        description="URL of the source video to process (e.g. a YouTube link).",
+        description="Source specification for the video to process (e.g. YouTube URL or uploaded file reference).",
     )
     clip_duration: int = Field(
         ...,
@@ -111,7 +111,8 @@ class VideoJobResponse(BaseModel):
 
     job_id: str = Field(..., description="Unique identifier for the job (UUID4).")
     status: JobStatus = Field(..., description="Current status of the job.")
-    video_url: HttpUrl
+    source: VideoSource = Field(..., description="The origin and location of the source video.")
     clip_duration: int
     number_of_clips: int
     created_at: datetime = Field(..., description="UTC timestamp of when the job was created.")
+
