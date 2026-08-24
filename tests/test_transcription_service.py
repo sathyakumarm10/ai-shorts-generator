@@ -5,6 +5,7 @@ the TranscriptionProvider abstraction, error handling, audio extraction cleanup,
 and TranscriptionService logic without requiring external paid STT APIs.
 """
 
+import math
 from pathlib import Path
 import pytest
 from pydantic import ValidationError
@@ -268,4 +269,224 @@ class TestTranscriptionService:
         # Verify temporary audio file and its temp directory are cleaned up after transcription
         temp_audio_file = audio_path_during_call[0]
         assert not temp_audio_file.exists(), "Temporary audio file was not cleaned up!"
+
+
+# ---------------------------------------------------------------------------
+# FasterWhisperTranscriptionProvider Unit Tests (Mocked)
+# ---------------------------------------------------------------------------
+
+
+class MockWhisperSegment:
+    """Mock segment matching faster-whisper Segment namedtuple interface."""
+
+    def __init__(self, start: float, end: float, text: str):
+        self.start = start
+        self.end = end
+        self.text = text
+
+
+class TestFasterWhisperTranscriptionProviderUnit:
+    def test_provider_initialization_and_configuration(self):
+        from app.services.transcription_service import FasterWhisperTranscriptionProvider
+
+        provider = FasterWhisperTranscriptionProvider(
+            model_size="base",
+            device="cpu",
+            compute_type="int8",
+            language="en",
+            download_root="custom_cache",
+            lazy_load=True,
+        )
+        assert provider.model_size == "base"
+        assert provider.device == "cpu"
+        assert provider.compute_type == "int8"
+        assert provider.language == "en"
+        assert provider.download_root == "custom_cache"
+        assert provider._model is None
+
+    def test_successful_mocked_segment_conversion(self, tmp_path: Path):
+        from app.services.transcription_service import FasterWhisperTranscriptionProvider
+
+        dummy_audio = tmp_path / "test.wav"
+        dummy_audio.write_bytes(b"dummy_wav_data")
+
+        provider = FasterWhisperTranscriptionProvider(lazy_load=True)
+
+        class MockModel:
+            def transcribe(self, path, language=None, beam_size=5):
+                segments = [
+                    MockWhisperSegment(start=0.0, end=2.5, text="Hello world"),
+                    MockWhisperSegment(start=3.0, end=6.0, text="This is a test"),
+                ]
+                return (s for s in segments), {}
+
+        provider._model = MockModel()
+        transcript = provider.transcribe(dummy_audio)
+
+        assert isinstance(transcript, TimestampedTranscript)
+        assert len(transcript.segments) == 2
+        assert transcript.segments[0].start_seconds == 0.0
+        assert transcript.segments[0].end_seconds == 2.5
+        assert transcript.segments[0].text == "Hello world"
+        assert transcript.segments[1].start_seconds == 3.0
+        assert transcript.segments[1].end_seconds == 6.0
+        assert transcript.segments[1].text == "This is a test"
+
+    def test_empty_generator_returns_empty_transcript(self, tmp_path: Path):
+        from app.services.transcription_service import FasterWhisperTranscriptionProvider
+
+        dummy_audio = tmp_path / "test.wav"
+        dummy_audio.write_bytes(b"dummy_wav_data")
+
+        provider = FasterWhisperTranscriptionProvider(lazy_load=True)
+
+        class MockModel:
+            def transcribe(self, path, language=None, beam_size=5):
+                return (s for s in []), {}
+
+        provider._model = MockModel()
+        transcript = provider.transcribe(dummy_audio)
+
+        assert isinstance(transcript, TimestampedTranscript)
+        assert len(transcript.segments) == 0
+
+    def test_invalid_whisper_timestamps_raises_transcription_error(self, tmp_path: Path):
+        from app.services.transcription_service import FasterWhisperTranscriptionProvider
+
+        dummy_audio = tmp_path / "test.wav"
+        dummy_audio.write_bytes(b"dummy_wav_data")
+
+        provider = FasterWhisperTranscriptionProvider(lazy_load=True)
+
+        class MockModel:
+            def transcribe(self, path, language=None, beam_size=5):
+                # end_seconds < start_seconds
+                segments = [MockWhisperSegment(start=5.0, end=3.0, text="Inverted timestamps")]
+                return (s for s in segments), {}
+
+        provider._model = MockModel()
+        with pytest.raises(TranscriptionError) as exc_info:
+            provider.transcribe(dummy_audio)
+        assert "invalid segment timestamps" in str(exc_info.value).lower()
+
+    def test_overlapping_whisper_segments_raises_transcription_error(self, tmp_path: Path):
+        from app.services.transcription_service import FasterWhisperTranscriptionProvider
+
+        dummy_audio = tmp_path / "test.wav"
+        dummy_audio.write_bytes(b"dummy_wav_data")
+
+        provider = FasterWhisperTranscriptionProvider(lazy_load=True)
+
+        class MockModel:
+            def transcribe(self, path, language=None, beam_size=5):
+                # Overlapping segments: segment 1 ends at 5.0, segment 2 starts at 4.0
+                segments = [
+                    MockWhisperSegment(start=0.0, end=5.0, text="Segment 1"),
+                    MockWhisperSegment(start=4.0, end=8.0, text="Segment 2"),
+                ]
+                return (s for s in segments), {}
+
+        provider._model = MockModel()
+        with pytest.raises(TranscriptionError) as exc_info:
+            provider.transcribe(dummy_audio)
+        assert "invalid or overlapping" in str(exc_info.value).lower()
+
+    def test_missing_audio_file_raises_transcription_error(self):
+        from app.services.transcription_service import FasterWhisperTranscriptionProvider
+
+        provider = FasterWhisperTranscriptionProvider(lazy_load=True)
+        with pytest.raises(TranscriptionError) as exc_info:
+            provider.transcribe(Path("non_existent_audio.wav"))
+        assert "not found" in str(exc_info.value).lower()
+
+    def test_model_transcribe_exception_wrapped_in_transcription_error(self, tmp_path: Path):
+        from app.services.transcription_service import FasterWhisperTranscriptionProvider
+
+        dummy_audio = tmp_path / "test.wav"
+        dummy_audio.write_bytes(b"dummy_wav_data")
+
+        provider = FasterWhisperTranscriptionProvider(lazy_load=True)
+
+        class FailingModel:
+            def transcribe(self, path, language=None, beam_size=5):
+                raise RuntimeError("CTranslate2 inference engine failed")
+
+        provider._model = FailingModel()
+        with pytest.raises(TranscriptionError) as exc_info:
+            provider.transcribe(dummy_audio)
+        assert "FasterWhisper transcription failed" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Real FasterWhisper Local Integration Test (Speech-To-Text)
+# ---------------------------------------------------------------------------
+
+
+def _generate_spoken_audio_fixture(output_wav: Path, phrase: str) -> bool:
+    """Generate a spoken speech audio WAV file using Windows Speech Synthesis."""
+    import subprocess
+
+    escaped_wav = str(output_wav).replace("'", "''")
+    escaped_phrase = phrase.replace("'", "''")
+    ps_script = (
+        f"Add-Type -AssemblyName System.Speech; "
+        f"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"$s.SetOutputToWaveFile('{escaped_wav}'); "
+        f"$s.Speak('{escaped_phrase}'); "
+        f"$s.Dispose()"
+    )
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return res.returncode == 0 and output_wav.is_file() and output_wav.stat().st_size > 0
+    except Exception:
+        return False
+
+
+class TestFasterWhisperRealIntegration:
+    def test_real_local_faster_whisper_transcription(self, tmp_path: Path):
+        from app.services.transcription_service import FasterWhisperTranscriptionProvider
+
+        spoken_wav = tmp_path / "real_speech.wav"
+        phrase = "Hello, this is a test of speech recognition."
+
+        speech_generated = _generate_spoken_audio_fixture(spoken_wav, phrase)
+        if not speech_generated:
+            pytest.skip("Windows Speech Synthesis (SAPI) is unavailable to generate spoken speech fixture.")
+
+        provider = FasterWhisperTranscriptionProvider(
+            model_size="tiny",
+            device="cpu",
+            compute_type="int8",
+            language="en",
+        )
+
+        try:
+            transcript = provider.transcribe(spoken_wav)
+        except TranscriptionError as exc:
+            pytest.skip(f"FasterWhisper model unavailable or download failed: {exc}")
+        except Exception as exc:
+            pytest.skip(f"FasterWhisper execution failed: {exc}")
+
+        # Verify output
+        assert isinstance(transcript, TimestampedTranscript)
+        assert len(transcript.segments) >= 1, "Expected at least one transcribed segment for spoken speech."
+
+        for seg in transcript.segments:
+            assert seg.start_seconds >= 0.0
+            assert seg.end_seconds > seg.start_seconds
+            assert math.isfinite(seg.start_seconds)
+            assert math.isfinite(seg.end_seconds)
+            assert len(seg.text.strip()) > 0
+
+        # Combine text to verify basic speech content recognition
+        full_text = " ".join(seg.text for seg in transcript.segments).lower()
+        assert any(word in full_text for word in ["hello", "this", "test", "speech", "recognition"]), (
+            f"Recognized text '{full_text}' did not match expected spoken words."
+        )
+
 

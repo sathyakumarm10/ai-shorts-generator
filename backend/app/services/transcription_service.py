@@ -54,6 +54,102 @@ class PlaceholderTranscriptionProvider(TranscriptionProvider):
         )
 
 
+class FasterWhisperTranscriptionProvider(TranscriptionProvider):
+    """Concrete local speech-to-text transcription provider using faster-whisper (CTranslate2)."""
+
+    def __init__(
+        self,
+        model_size: str = "tiny",
+        device: str = "cpu",
+        compute_type: str = "int8",
+        language: Optional[str] = None,
+        download_root: Optional[str | Path] = None,
+        lazy_load: bool = True,
+    ) -> None:
+        self.model_size = model_size
+        self.device = device
+        self.compute_type = compute_type
+        self.language = language
+        self.download_root = str(download_root) if download_root else None
+        self._model = None
+        if not lazy_load:
+            self._get_model()
+
+    def _get_model(self):
+        """Lazy loader for the WhisperModel instance."""
+        if self._model is None:
+            try:
+                from faster_whisper import WhisperModel
+
+                self._model = WhisperModel(
+                    self.model_size,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                    download_root=self.download_root,
+                )
+            except Exception as exc:
+                raise TranscriptionError(
+                    f"Failed to load FasterWhisper model '{self.model_size}': {exc}"
+                ) from exc
+        return self._model
+
+    def transcribe(self, audio_or_video_path: Path) -> TimestampedTranscript:
+        """Transcribe an audio or video file using local faster-whisper.
+
+        Args:
+            audio_or_video_path: Path to the local audio or video file.
+
+        Returns:
+            TimestampedTranscript: Validated, chronologically ordered transcript segments.
+
+        Raises:
+            TranscriptionError: If the model fails or produces invalid/overlapping timestamps.
+        """
+        path = Path(audio_or_video_path)
+        if not path.is_file():
+            raise TranscriptionError(f"Audio file for transcription not found: {path}")
+
+        model = self._get_model()
+        try:
+            segments_generator, info = model.transcribe(
+                str(path),
+                language=self.language,
+                beam_size=5,
+            )
+            segments_list = []
+            for seg in segments_generator:
+                text = seg.text.strip() if seg.text else ""
+                if not text:
+                    continue
+
+                try:
+                    start = float(seg.start)
+                    end = float(seg.end)
+                    segment = TranscriptSegment(
+                        start_seconds=start,
+                        end_seconds=end,
+                        text=text,
+                    )
+                    segments_list.append(segment)
+                except Exception as exc:
+                    raise TranscriptionError(
+                        f"Whisper produced invalid segment timestamps or text (start={seg.start}, end={seg.end}, text='{text}'): {exc}"
+                    ) from exc
+
+            try:
+                return TimestampedTranscript(segments=segments_list)
+            except Exception as exc:
+                raise TranscriptionError(
+                    f"Whisper generated invalid or overlapping transcript segments: {exc}"
+                ) from exc
+
+        except TranscriptionError:
+            raise
+        except Exception as exc:
+            raise TranscriptionError(f"FasterWhisper transcription failed: {exc}") from exc
+
+
+
 class TranscriptionService:
     """Service responsible for managing audio extraction and transcription."""
 
