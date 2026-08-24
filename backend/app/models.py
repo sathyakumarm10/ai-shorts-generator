@@ -268,6 +268,22 @@ class HighlightCandidate(BaseModel):
         return self
 
 
+class GeneratedHighlightClip(BaseModel):
+    """Represents an MP4 video clip generated from a ranked highlight candidate.
+
+    Combines the full HighlightCandidate metadata and the local path to the rendered clip.
+    """
+
+    candidate: HighlightCandidate = Field(..., description="The highlight candidate used to generate this clip.")
+    file_path: str = Field(..., min_length=1, description="Local file path to the generated MP4 clip.")
+
+    @model_validator(mode="after")
+    def validate_clip_path(self) -> "GeneratedHighlightClip":
+        if not self.file_path or not self.file_path.strip():
+            raise ValueError("file_path cannot be empty or whitespace only")
+        return self
+
+
 class VideoJobRequest(BaseModel):
     """Request body for creating a new video processing job.
 
