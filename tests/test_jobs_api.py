@@ -509,3 +509,165 @@ def test_upload_ingestion_remains_not_implemented(tmp_path):
         service.ingest(upload_source)
 
 
+# ---------------------------------------------------------------------
+# VideoMetadata & VideoMetadataService unit tests
+# ---------------------------------------------------------------------
+
+
+def test_video_metadata_model_validation():
+    import pytest
+    from pydantic import ValidationError
+    from app.models import VideoMetadata
+
+    meta = VideoMetadata(
+        duration_seconds=124.5,
+        width=1920,
+        height=1080,
+        format="mov,mp4,m4a,3gp,3g2,mj2",
+        file_size_bytes=1048576,
+    )
+    assert meta.duration_seconds == 124.5
+    assert meta.width == 1920
+    assert meta.height == 1080
+    assert meta.format == "mov,mp4,m4a,3gp,3g2,mj2"
+    assert meta.file_size_bytes == 1048576
+
+    # Zero or negative duration rejected
+    with pytest.raises(ValidationError):
+        VideoMetadata(
+            duration_seconds=0.0,
+            width=1920,
+            height=1080,
+            format="mp4",
+            file_size_bytes=100,
+        )
+
+
+def test_video_metadata_service_missing_input_file(tmp_path):
+    import pytest
+    from app.models import IngestedVideo
+    from app.services.video_metadata_service import VideoMetadataError, VideoMetadataService
+
+    service = VideoMetadataService()
+    nonexistent = IngestedVideo(file_path=str(tmp_path / "nonexistent.mp4"))
+
+    with pytest.raises(VideoMetadataError, match="Video file not found"):
+        service.extract_metadata(nonexistent)
+
+
+def test_video_metadata_service_successful_extraction(monkeypatch, tmp_path):
+    import json
+    from app.models import IngestedVideo
+    from app.services.video_metadata_service import VideoMetadataService
+
+    video_file = tmp_path / "sample.mp4"
+    video_file.write_bytes(b"0" * 2048)  # 2048 bytes file size
+
+    mock_ffprobe_output = {
+        "format": {
+            "duration": "120.45",
+            "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+        },
+        "streams": [
+            {
+                "width": 1920,
+                "height": 1080,
+            }
+        ],
+    }
+
+    class MockCompletedProcess:
+        returncode = 0
+        stdout = json.dumps(mock_ffprobe_output)
+        stderr = ""
+
+    def mock_run(cmd, capture_output, text, check):
+        assert str(video_file) in cmd
+        return MockCompletedProcess()
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    service = VideoMetadataService()
+    metadata = service.extract_metadata(IngestedVideo(file_path=str(video_file)))
+
+    assert metadata.duration_seconds == 120.45
+    assert metadata.width == 1920
+    assert metadata.height == 1080
+    assert metadata.format == "mov,mp4,m4a,3gp,3g2,mj2"
+    assert metadata.file_size_bytes == 2048
+
+
+def test_video_metadata_service_ffprobe_failure(monkeypatch, tmp_path):
+    import pytest
+    from app.models import IngestedVideo
+    from app.services.video_metadata_service import VideoMetadataError, VideoMetadataService
+
+    video_file = tmp_path / "corrupt.mp4"
+    video_file.write_bytes(b"corrupt")
+
+    class FailingProcess:
+        returncode = 1
+        stdout = ""
+        stderr = "Invalid data found when processing input"
+
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: FailingProcess())
+
+    service = VideoMetadataService()
+    with pytest.raises(VideoMetadataError, match="ffprobe inspection failed"):
+        service.extract_metadata(IngestedVideo(file_path=str(video_file)))
+
+
+def test_video_metadata_service_malformed_json_output(monkeypatch, tmp_path):
+    import pytest
+    from app.models import IngestedVideo
+    from app.services.video_metadata_service import VideoMetadataError, VideoMetadataService
+
+    video_file = tmp_path / "sample.mp4"
+    video_file.write_bytes(b"data")
+
+    class MalformedProcess:
+        returncode = 0
+        stdout = "not-json-content"
+        stderr = ""
+
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: MalformedProcess())
+
+    service = VideoMetadataService()
+    with pytest.raises(VideoMetadataError, match="Failed to parse ffprobe JSON output"):
+        service.extract_metadata(IngestedVideo(file_path=str(video_file)))
+
+
+def test_video_metadata_service_missing_duration_or_streams(monkeypatch, tmp_path):
+    import json
+    import pytest
+    from app.models import IngestedVideo
+    from app.services.video_metadata_service import VideoMetadataError, VideoMetadataService
+
+    video_file = tmp_path / "sample.mp4"
+    video_file.write_bytes(b"data")
+
+    # Missing duration
+    class MissingDurationProcess:
+        returncode = 0
+        stdout = json.dumps({"format": {"format_name": "mp4"}, "streams": [{"width": 1920, "height": 1080}]})
+        stderr = ""
+
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: MissingDurationProcess())
+    service = VideoMetadataService()
+
+    with pytest.raises(VideoMetadataError, match="ffprobe output does not contain duration information"):
+        service.extract_metadata(IngestedVideo(file_path=str(video_file)))
+
+    # Missing streams
+    class MissingStreamsProcess:
+        returncode = 0
+        stdout = json.dumps({"format": {"duration": "60.0", "format_name": "mp4"}, "streams": []})
+        stderr = ""
+
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: MissingStreamsProcess())
+
+    with pytest.raises(VideoMetadataError, match="No video streams found in the media file"):
+        service.extract_metadata(IngestedVideo(file_path=str(video_file)))
+
+
+

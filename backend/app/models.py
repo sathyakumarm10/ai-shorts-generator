@@ -87,6 +87,21 @@ class IngestedVideo(BaseModel):
     )
 
 
+class VideoMetadata(BaseModel):
+    """Represents technical metadata extracted from an ingested video file.
+
+    Provides critical video parameters (duration, dimensions, format, file size)
+    required for subsequent clip segmentation, verification, and AI processing.
+    """
+
+    duration_seconds: float = Field(..., gt=0, description="Total duration of the video in seconds.")
+    width: int = Field(..., gt=0, description="Width of the video stream in pixels.")
+    height: int = Field(..., gt=0, description="Height of the video stream in pixels.")
+    format: str = Field(..., min_length=1, description="Container/format name of the video file.")
+    file_size_bytes: int = Field(..., gt=0, description="Size of the video file on disk in bytes.")
+
+
+
 
 
 
