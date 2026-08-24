@@ -372,3 +372,47 @@ def test_video_source_empty_upload_location_rejected():
 
     with pytest.raises(ValidationError):
         VideoSource(type=VideoSourceType.UPLOAD, location="")
+
+
+# ---------------------------------------------------------------------
+# IngestedVideo & VideoIngestionService unit tests
+# ---------------------------------------------------------------------
+
+
+def test_valid_ingested_video_model():
+    from app.models import IngestedVideo
+
+    ingested = IngestedVideo(file_path="/tmp/videos/test_video.mp4")
+    assert ingested.file_path == "/tmp/videos/test_video.mp4"
+
+
+def test_ingested_video_empty_path_rejected():
+    import pytest
+    from pydantic import ValidationError
+    from app.models import IngestedVideo
+
+    with pytest.raises(ValidationError):
+        IngestedVideo(file_path="")
+
+
+def test_ingestion_service_accepts_video_source_contract():
+    import pytest
+    from app.services.video_ingestion_service import VideoIngestionService
+
+    service = VideoIngestionService()
+    youtube_source = VideoSource(
+        type=VideoSourceType.YOUTUBE,
+        location="https://www.youtube.com/watch?v=example",
+    )
+    upload_source = VideoSource(
+        type=VideoSourceType.UPLOAD,
+        location="/local/path/video.mp4",
+    )
+
+    # Ingestion logic is not implemented yet, so the service explicitly raises NotImplementedError
+    with pytest.raises(NotImplementedError, match="YouTube video ingestion is not implemented yet"):
+        service.ingest(youtube_source)
+
+    with pytest.raises(NotImplementedError, match="Upload video ingestion is not implemented yet"):
+        service.ingest(upload_source)
+

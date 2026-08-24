@@ -73,6 +73,21 @@ class VideoSource(BaseModel):
         return data
 
 
+class IngestedVideo(BaseModel):
+    """Represents a locally available video file after ingestion.
+
+    This contains a local file path reference that can subsequently be passed
+    to video processing routines (e.g. clipping, analysis).
+    """
+
+    file_path: str = Field(
+        ...,
+        min_length=1,
+        description="Local file path or reference to the ingested video file.",
+    )
+
+
+
 
 
 class VideoJobRequest(BaseModel):
