@@ -772,5 +772,173 @@ def test_media_tools_all_unavailable(monkeypatch):
     assert report.yt_dlp.path is None
 
 
+# ---------------------------------------------------------------------
+# VideoClipRequest & VideoClipService unit tests
+# ---------------------------------------------------------------------
+
+
+def test_video_clip_request_validation():
+    import pytest
+    from pydantic import ValidationError
+    from app.models import VideoClipRequest
+
+    # Valid boundary cases (30, 60, 120)
+    req30 = VideoClipRequest(start_seconds=0.0, duration_seconds=30.0)
+    assert req30.start_seconds == 0.0
+    assert req30.duration_seconds == 30.0
+
+    req60 = VideoClipRequest(start_seconds=15.5, duration_seconds=60.0)
+    assert req60.start_seconds == 15.5
+    assert req60.duration_seconds == 60.0
+
+    req120 = VideoClipRequest(start_seconds=100.0, duration_seconds=120.0)
+    assert req120.duration_seconds == 120.0
+
+    # Duration below 30 rejected
+    with pytest.raises(ValidationError):
+        VideoClipRequest(start_seconds=0.0, duration_seconds=29.9)
+
+    # Duration above 120 rejected
+    with pytest.raises(ValidationError):
+        VideoClipRequest(start_seconds=0.0, duration_seconds=120.1)
+
+    # Negative start time rejected
+    with pytest.raises(ValidationError):
+        VideoClipRequest(start_seconds=-1.0, duration_seconds=30.0)
+
+    # NaN or infinite values rejected
+    with pytest.raises(ValidationError):
+        VideoClipRequest(start_seconds=float("nan"), duration_seconds=30.0)
+
+    with pytest.raises(ValidationError):
+        VideoClipRequest(start_seconds=0.0, duration_seconds=float("inf"))
+
+
+def test_video_clip_service_missing_input_file(tmp_path):
+    import pytest
+    from app.models import IngestedVideo, VideoClipRequest
+    from app.services.video_clip_service import VideoClipError, VideoClipService
+
+    service = VideoClipService(output_dir=tmp_path)
+    nonexistent = IngestedVideo(file_path=str(tmp_path / "missing.mp4"))
+    req = VideoClipRequest(start_seconds=0.0, duration_seconds=30.0)
+
+    with pytest.raises(VideoClipError, match="Source video file not found"):
+        service.create_clip(nonexistent, req)
+
+
+def test_video_clip_service_start_beyond_metadata_duration(tmp_path):
+    import pytest
+    from app.models import IngestedVideo, VideoClipRequest, VideoMetadata
+    from app.services.video_clip_service import VideoClipError, VideoClipService
+
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"dummy video")
+
+    meta = VideoMetadata(
+        duration_seconds=50.0,
+        width=1920,
+        height=1080,
+        format="mp4",
+        file_size_bytes=1024,
+    )
+
+    service = VideoClipService(output_dir=tmp_path)
+    req = VideoClipRequest(start_seconds=55.0, duration_seconds=30.0)
+
+    with pytest.raises(VideoClipError, match="is at or beyond source video duration"):
+        service.create_clip(IngestedVideo(file_path=str(source_file)), req, metadata=meta)
+
+
+def test_video_clip_service_successful_ffmpeg_execution(monkeypatch, tmp_path):
+    from pathlib import Path
+    from app.models import IngestedVideo, VideoClipRequest
+    from app.services.video_clip_service import VideoClipService
+
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"source data")
+
+    output_dir = tmp_path / "clips"
+
+    recorded_cmd = []
+
+    class MockCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def mock_subprocess_run(cmd, capture_output, text, check):
+        # Verify shell=False / list of args
+        assert isinstance(cmd, list)
+        recorded_cmd.extend(cmd)
+        # Output file is the last argument
+        out_file = Path(cmd[-1])
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_bytes(b"generated clip content")
+        return MockCompletedProcess()
+
+    monkeypatch.setattr("subprocess.run", mock_subprocess_run)
+
+    service = VideoClipService(output_dir=output_dir)
+    req = VideoClipRequest(start_seconds=10.0, duration_seconds=45.0)
+
+    clip = service.create_clip(IngestedVideo(file_path=str(source_file)), req)
+
+    assert Path(clip.file_path).is_file()
+    assert str(output_dir) in clip.file_path
+    # Verify FFmpeg parameters in recorded command
+    assert "-ss" in recorded_cmd
+    assert "10.0" in recorded_cmd
+    assert "-i" in recorded_cmd
+    assert str(source_file) in recorded_cmd
+    assert "-t" in recorded_cmd
+    assert "45.0" in recorded_cmd
+
+
+def test_video_clip_service_ffmpeg_failure(monkeypatch, tmp_path):
+    import pytest
+    from app.models import IngestedVideo, VideoClipRequest
+    from app.services.video_clip_service import VideoClipError, VideoClipService
+
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"source data")
+
+    class FailingProcess:
+        returncode = 1
+        stdout = ""
+        stderr = "Error while decoding stream #0:0"
+
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: FailingProcess())
+
+    service = VideoClipService(output_dir=tmp_path)
+    req = VideoClipRequest(start_seconds=0.0, duration_seconds=30.0)
+
+    with pytest.raises(VideoClipError, match="FFmpeg clip generation failed"):
+        service.create_clip(IngestedVideo(file_path=str(source_file)), req)
+
+
+def test_video_clip_service_missing_output_file(monkeypatch, tmp_path):
+    import pytest
+    from app.models import IngestedVideo, VideoClipRequest
+    from app.services.video_clip_service import VideoClipError, VideoClipService
+
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"source data")
+
+    class SuccessProcessNoFile:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: SuccessProcessNoFile())
+
+    service = VideoClipService(output_dir=tmp_path)
+    req = VideoClipRequest(start_seconds=0.0, duration_seconds=30.0)
+
+    with pytest.raises(VideoClipError, match="generated clip was not found"):
+        service.create_clip(IngestedVideo(file_path=str(source_file)), req)
+
+
+
 
 

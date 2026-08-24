@@ -101,6 +101,32 @@ class VideoMetadata(BaseModel):
     file_size_bytes: int = Field(..., gt=0, description="Size of the video file on disk in bytes.")
 
 
+class VideoClipRequest(BaseModel):
+    """Represents a request to cut a specific segment/clip from a video.
+
+    Specifies start offset in seconds and the target clip duration (30 to 120 seconds).
+    """
+
+    start_seconds: float = Field(..., ge=0.0, description="Start timestamp of the clip in seconds.")
+    duration_seconds: float = Field(
+        ...,
+        ge=30.0,
+        le=120.0,
+        description="Duration of the clip in seconds (30-120 inclusive).",
+    )
+
+    @model_validator(mode="after")
+    def validate_finite_numbers(self) -> "VideoClipRequest":
+        import math
+
+        if not math.isfinite(self.start_seconds):
+            raise ValueError("start_seconds must be a finite number")
+        if not math.isfinite(self.duration_seconds):
+            raise ValueError("duration_seconds must be a finite number")
+        return self
+
+
+
 
 
 
