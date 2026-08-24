@@ -126,9 +126,35 @@ class VideoClipRequest(BaseModel):
         return self
 
 
+class PlannedClip(BaseModel):
+    """Represents a planned video clip segment produced by the ClipPlannerService.
 
+    Contains 1-based indexing, start and end timestamps in seconds, and duration.
+    """
 
+    index: int = Field(..., ge=1, description="1-based positive index of the planned clip.")
+    start_seconds: float = Field(..., ge=0.0, description="Start timestamp of the clip in seconds.")
+    duration_seconds: float = Field(
+        ...,
+        ge=30.0,
+        le=120.0,
+        description="Duration of the clip in seconds (30-120 inclusive).",
+    )
+    end_seconds: float = Field(..., gt=0.0, description="End timestamp of the clip in seconds.")
 
+    @model_validator(mode="after")
+    def validate_clip(self) -> "PlannedClip":
+        import math
+
+        if not math.isfinite(self.start_seconds):
+            raise ValueError("start_seconds must be a finite number")
+        if not math.isfinite(self.duration_seconds):
+            raise ValueError("duration_seconds must be a finite number")
+        if not math.isfinite(self.end_seconds):
+            raise ValueError("end_seconds must be a finite number")
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("end_seconds must be greater than start_seconds")
+        return self
 
 
 class VideoJobRequest(BaseModel):
