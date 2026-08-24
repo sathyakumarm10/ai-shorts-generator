@@ -157,6 +157,60 @@ class PlannedClip(BaseModel):
         return self
 
 
+class TranscriptSegment(BaseModel):
+    """Represents a discrete timestamped speech segment from an audio/video transcription.
+
+    Contains start timestamp in seconds, end timestamp in seconds, and transcribed text.
+    """
+
+    start_seconds: float = Field(..., ge=0.0, description="Start timestamp of the segment in seconds.")
+    end_seconds: float = Field(..., gt=0.0, description="End timestamp of the segment in seconds.")
+    text: str = Field(..., min_length=1, description="Transcribed speech text content.")
+
+    @model_validator(mode="after")
+    def validate_segment(self) -> "TranscriptSegment":
+        import math
+
+        if not math.isfinite(self.start_seconds):
+            raise ValueError("start_seconds must be a finite number")
+        if not math.isfinite(self.end_seconds):
+            raise ValueError("end_seconds must be a finite number")
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("end_seconds must be strictly greater than start_seconds")
+        if not self.text or not self.text.strip():
+            raise ValueError("text cannot be empty or blank")
+        return self
+
+
+class TimestampedTranscript(BaseModel):
+    """Represents the complete timestamped transcript of a media source.
+
+    Contains an ordered list of non-overlapping TranscriptSegment objects.
+    """
+
+    segments: list[TranscriptSegment] = Field(
+        default_factory=list,
+        description="Chronologically ordered non-overlapping transcript segments.",
+    )
+
+    @model_validator(mode="after")
+    def validate_segments_order_and_overlap(self) -> "TimestampedTranscript":
+        for i in range(len(self.segments) - 1):
+            curr_seg = self.segments[i]
+            next_seg = self.segments[i + 1]
+            if curr_seg.start_seconds > next_seg.start_seconds:
+                raise ValueError(
+                    f"Transcript segments must be chronologically ordered. "
+                    f"Segment {i} starts at {curr_seg.start_seconds}s after segment {i+1} at {next_seg.start_seconds}s."
+                )
+            if curr_seg.end_seconds > next_seg.start_seconds + 1e-6:
+                raise ValueError(
+                    f"Transcript segments must not overlap. "
+                    f"Segment {i} ends at {curr_seg.end_seconds}s but segment {i+1} starts at {next_seg.start_seconds}s."
+                )
+        return self
+
+
 class VideoJobRequest(BaseModel):
     """Request body for creating a new video processing job.
 
