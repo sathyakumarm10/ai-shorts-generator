@@ -11,7 +11,7 @@ project.
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from app.models import VideoJobRequest, VideoJobResponse
 
@@ -57,4 +57,24 @@ def create_job(request: VideoJobRequest) -> VideoJobResponse:
         created_at=datetime.now(timezone.utc),
     )
     jobs[job.job_id] = job
+    return job
+
+
+@app.get("/api/jobs/{job_id}", response_model=VideoJobResponse)
+def get_job(job_id: str) -> VideoJobResponse:
+    """Retrieve an existing video processing job by its job ID.
+
+    `job_id` is a path parameter - FastAPI extracts it directly from the
+    URL (e.g. `/api/jobs/abc-123` -> `job_id == "abc-123"`).
+
+    This only looks the job up in the in-memory `jobs` store created by
+    `POST /api/jobs`. If no job with that ID exists (e.g. it was never
+    created, or the server has since restarted and lost its in-memory
+    state), an HTTP 404 is returned with a clear error message. No actual
+    video processing status is tracked or updated yet - the job simply
+    reflects whatever was stored at creation time.
+    """
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
     return job

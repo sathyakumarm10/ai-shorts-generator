@@ -157,3 +157,36 @@ def test_invalid_video_url_rejected():
 def test_empty_video_url_rejected():
     response = client.post("/api/jobs", json=_payload(video_url=""))
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------
+# GET /api/jobs/{job_id} - retrieving an existing job
+# ---------------------------------------------------------------------
+
+
+def test_get_job_returns_created_job():
+    create_response = client.post("/api/jobs", json=VALID_PAYLOAD)
+    assert create_response.status_code == 200
+    created_job = create_response.json()
+    job_id = created_job["job_id"]
+
+    get_response = client.get(f"/api/jobs/{job_id}")
+    assert get_response.status_code == 200
+
+    fetched_job = get_response.json()
+    assert fetched_job["job_id"] == job_id
+    assert fetched_job["status"] == "queued"
+    assert fetched_job["clip_duration"] == VALID_PAYLOAD["clip_duration"]
+    assert fetched_job["number_of_clips"] == VALID_PAYLOAD["number_of_clips"]
+    assert fetched_job["video_url"] == VALID_PAYLOAD["video_url"]
+
+
+# ---------------------------------------------------------------------
+# GET /api/jobs/{job_id} - nonexistent job
+# ---------------------------------------------------------------------
+
+
+def test_get_nonexistent_job_returns_404():
+    response = client.get("/api/jobs/nonexistent-id")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Job not found"}
