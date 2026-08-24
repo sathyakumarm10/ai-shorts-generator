@@ -670,4 +670,107 @@ def test_video_metadata_service_missing_duration_or_streams(monkeypatch, tmp_pat
         service.extract_metadata(IngestedVideo(file_path=str(video_file)))
 
 
+# ---------------------------------------------------------------------
+# MediaToolsService unit tests
+# ---------------------------------------------------------------------
+
+
+def test_media_tools_all_available(monkeypatch):
+    from app.services.media_tools_service import MediaToolsService
+
+    def mock_which(cmd, path=None):
+        return f"/usr/bin/{cmd}"
+
+    monkeypatch.setattr("shutil.which", mock_which)
+
+    service = MediaToolsService()
+    report = service.check_all()
+
+    assert report.ffmpeg.available is True
+    assert report.ffmpeg.path is not None
+    assert "ffmpeg" in report.ffmpeg.path
+
+    assert report.ffprobe.available is True
+    assert report.ffprobe.path is not None
+    assert "ffprobe" in report.ffprobe.path
+
+    assert report.yt_dlp.available is True
+    assert report.yt_dlp.path is not None
+    assert "yt-dlp" in report.yt_dlp.path
+
+
+def test_media_tools_ffmpeg_unavailable(monkeypatch):
+    from app.services.media_tools_service import MediaToolsService
+
+    def mock_which(cmd, path=None):
+        if cmd == "ffmpeg":
+            return None
+        return f"/usr/bin/{cmd}"
+
+    monkeypatch.setattr("shutil.which", mock_which)
+
+    service = MediaToolsService()
+    report = service.check_all()
+
+    assert report.ffmpeg.available is False
+    assert report.ffmpeg.path is None
+    assert report.ffprobe.available is True
+    assert report.yt_dlp.available is True
+
+
+def test_media_tools_ffprobe_unavailable(monkeypatch):
+    from app.services.media_tools_service import MediaToolsService
+
+    def mock_which(cmd, path=None):
+        if cmd == "ffprobe":
+            return None
+        return f"/usr/bin/{cmd}"
+
+    monkeypatch.setattr("shutil.which", mock_which)
+
+    service = MediaToolsService()
+    report = service.check_all()
+
+    assert report.ffmpeg.available is True
+    assert report.ffprobe.available is False
+    assert report.ffprobe.path is None
+    assert report.yt_dlp.available is True
+
+
+def test_media_tools_yt_dlp_unavailable(monkeypatch):
+    from app.services.media_tools_service import MediaToolsService
+
+    def mock_which(cmd, path=None):
+        if cmd == "yt-dlp":
+            return None
+        return f"/usr/bin/{cmd}"
+
+    monkeypatch.setattr("shutil.which", mock_which)
+
+    service = MediaToolsService()
+    report = service.check_all()
+
+    assert report.ffmpeg.available is True
+    assert report.ffprobe.available is True
+    assert report.yt_dlp.available is False
+    assert report.yt_dlp.path is None
+
+
+def test_media_tools_all_unavailable(monkeypatch):
+    from app.services.media_tools_service import MediaToolsService
+
+    monkeypatch.setattr("shutil.which", lambda cmd, path=None: None)
+
+    service = MediaToolsService()
+    report = service.check_all()
+
+    assert report.ffmpeg.available is False
+    assert report.ffmpeg.path is None
+    assert report.ffprobe.available is False
+    assert report.ffprobe.path is None
+    assert report.yt_dlp.available is False
+    assert report.yt_dlp.path is None
+
+
+
 
