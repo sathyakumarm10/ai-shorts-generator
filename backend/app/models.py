@@ -319,6 +319,54 @@ class VerticalVideoRequest(BaseModel):
         return self
 
 
+class CaptionSegment(BaseModel):
+    """Represents an individual timestamped subtitle/caption segment."""
+
+    start_seconds: float = Field(..., ge=0.0, description="Start timestamp of the caption in seconds.")
+    end_seconds: float = Field(..., gt=0.0, description="End timestamp of the caption in seconds.")
+    text: str = Field(..., min_length=1, description="Caption text content.")
+
+    @model_validator(mode="after")
+    def validate_segment(self) -> "CaptionSegment":
+        import math
+
+        if not math.isfinite(self.start_seconds):
+            raise ValueError("start_seconds must be a finite number")
+        if not math.isfinite(self.end_seconds):
+            raise ValueError("end_seconds must be a finite number")
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("end_seconds must be strictly greater than start_seconds")
+        if not self.text or not self.text.strip():
+            raise ValueError("text cannot be empty or whitespace only")
+        return self
+
+
+class CaptionTrack(BaseModel):
+    """Represents a complete set of chronological, non-overlapping caption segments."""
+
+    segments: list[CaptionSegment] = Field(
+        default_factory=list,
+        description="List of chronological non-overlapping caption segments.",
+    )
+
+    @model_validator(mode="after")
+    def validate_track_order_and_overlap(self) -> "CaptionTrack":
+        for i in range(len(self.segments) - 1):
+            curr = self.segments[i]
+            next_seg = self.segments[i + 1]
+            if curr.start_seconds > next_seg.start_seconds:
+                raise ValueError(
+                    f"Caption segments must be in chronological order: segment {i} starts at "
+                    f"{curr.start_seconds}s after segment {i+1} at {next_seg.start_seconds}s"
+                )
+            if curr.end_seconds > next_seg.start_seconds + 1e-6:
+                raise ValueError(
+                    f"Caption segments must not overlap: segment {i} ends at "
+                    f"{curr.end_seconds}s but segment {i+1} starts at {next_seg.start_seconds}s"
+                )
+        return self
+
+
 class VideoJobRequest(BaseModel):
     """Request body for creating a new video processing job.
 
