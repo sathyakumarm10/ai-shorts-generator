@@ -6,13 +6,14 @@ candidate clipping, vertical 9:16 framing, and styled caption burn-in into a sin
 unified video processing pipeline.
 """
 
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from app.models import (
     CaptionSegment,
     CaptionTrack,
     GeneratedShort,
     HighlightCandidate,
+    JobStatus,
     ShortsGenerationRequest,
     ShortsGenerationResult,
     VerticalVideoRequest,
@@ -71,6 +72,7 @@ class ShortsGenerationService:
         max_clip_duration: float = 120.0,
         vertical_width: int = 1080,
         vertical_height: int = 1920,
+        progress_callback: Optional[Callable[[JobStatus, float, str], None]] = None,
     ) -> ShortsGenerationResult:
         """Run the full end-to-end shorts generation pipeline.
 
@@ -93,6 +95,7 @@ class ShortsGenerationService:
             max_clip_duration: Maximum allowed duration for a candidate.
             vertical_width: Target vertical width in pixels.
             vertical_height: Target vertical height in pixels.
+            progress_callback: Optional callback receiving (status, progress_percent, message).
 
         Returns:
             ShortsGenerationResult: Complete result with ingested video, metadata,
@@ -101,6 +104,13 @@ class ShortsGenerationService:
         Raises:
             ShortsGenerationError: If any stage in the pipeline fails.
         """
+        def report_progress(status: JobStatus, percent: float, msg: str) -> None:
+            if progress_callback is not None:
+                try:
+                    progress_callback(status, percent, msg)
+                except Exception:
+                    pass
+
         # Validate or build ShortsGenerationRequest
         if isinstance(source, ShortsGenerationRequest):
             req = source
@@ -124,24 +134,28 @@ class ShortsGenerationService:
             )
 
         # 1. Ingest source video
+        report_progress(JobStatus.INGESTING, 10.0, "Ingesting source video")
         try:
             ingested_video = self.ingestion_service.ingest(req.source)
         except (VideoIngestionError, Exception) as exc:
             raise ShortsGenerationError(f"Video ingestion failed: {exc}") from exc
 
         # 2. Extract metadata
+        report_progress(JobStatus.EXTRACTING_METADATA, 20.0, "Extracting video metadata")
         try:
             metadata = self.metadata_service.extract_metadata(ingested_video.file_path)
         except (VideoMetadataError, Exception) as exc:
             raise ShortsGenerationError(f"Video metadata extraction failed: {exc}") from exc
 
         # 3. Transcribe audio into timestamped transcript
+        report_progress(JobStatus.TRANSCRIBING, 35.0, "Transcribing audio to text")
         try:
             transcript = self.transcription_service.transcribe(ingested_video)
         except (TranscriptionError, Exception) as exc:
             raise ShortsGenerationError(f"Audio transcription failed: {exc}") from exc
 
         # 4. Highlight detection and candidate generation
+        report_progress(JobStatus.FINDING_HIGHLIGHTS, 50.0, "Analyzing transcript for highlights")
         try:
             candidates: List[HighlightCandidate] = self.highlight_scoring_service.generate_candidates(
                 transcript,
@@ -154,6 +168,7 @@ class ShortsGenerationService:
             raise ShortsGenerationError(f"Highlight candidate generation failed: {exc}") from exc
 
         if not candidates:
+            report_progress(JobStatus.COMPLETED, 100.0, "No candidate clips found")
             return ShortsGenerationResult(
                 source_video=ingested_video,
                 metadata=metadata,
@@ -163,6 +178,7 @@ class ShortsGenerationService:
             )
 
         # 5. Render candidate raw clips
+        report_progress(JobStatus.GENERATING_CLIPS, 65.0, f"Rendering {min(len(candidates), req.number_of_clips)} candidate clips")
         try:
             rendered_clips = self.highlight_clip_service.generate_clips(
                 video=ingested_video,
@@ -178,6 +194,7 @@ class ShortsGenerationService:
             cand = clip.candidate
 
             # Convert to vertical 9:16
+            report_progress(JobStatus.CONVERTING_VERTICAL, 80.0, f"Converting short #{idx} to 9:16 vertical format")
             try:
                 vert_req = VerticalVideoRequest(width=req.vertical_width, height=req.vertical_height)
                 vertical_video = self.vertical_video_service.convert_to_vertical(clip.file_path, vert_req)
@@ -191,6 +208,7 @@ class ShortsGenerationService:
 
             # Optional: Extract relative captions for this clip's time window and burn them
             if req.include_captions:
+                report_progress(JobStatus.ADDING_CAPTIONS, 90.0, f"Burning styled captions into short #{idx}")
                 relative_segments: List[CaptionSegment] = []
                 c_start = cand.start_seconds
                 c_end = cand.end_seconds
@@ -234,6 +252,7 @@ class ShortsGenerationService:
                 )
             )
 
+        report_progress(JobStatus.ADDING_CAPTIONS, 95.0, f"Finalizing {len(generated_shorts)} shorts")
         return ShortsGenerationResult(
             source_video=ingested_video,
             metadata=metadata,

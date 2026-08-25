@@ -14,25 +14,19 @@ from pydantic import BaseModel, Field, HttpUrl, TypeAdapter, model_validator
 
 
 class JobStatus(str, Enum):
-    """Controlled set of allowed values for a job's status.
-
-    Using an enum instead of a plain string prevents typos or unexpected
-    values (e.g. "Queued" or "done") from ever being stored or returned by
-    the API. Inheriting from both `str` and `Enum` means each member behaves
-    like a normal string at runtime, so FastAPI/Pydantic serialize it as a
-    plain JSON string (e.g. "queued") rather than something like
-    "JobStatus.QUEUED".
-
-    Only job creation (status starts as QUEUED) is implemented so far.
-    Transitioning a job between statuses (e.g. to PROCESSING, COMPLETED, or
-    FAILED) will be added in a later stage once actual video processing
-    exists.
-    """
+    """Controlled set of allowed values for a job's status."""
 
     QUEUED = "queued"
-    PROCESSING = "processing"
+    INGESTING = "ingesting"
+    EXTRACTING_METADATA = "extracting_metadata"
+    TRANSCRIBING = "transcribing"
+    FINDING_HIGHLIGHTS = "finding_highlights"
+    GENERATING_CLIPS = "generating_clips"
+    CONVERTING_VERTICAL = "converting_vertical"
+    ADDING_CAPTIONS = "adding_captions"
     COMPLETED = "completed"
     FAILED = "failed"
+    PROCESSING = "processing"
 
 
 class VideoSourceType(str, Enum):
@@ -460,6 +454,62 @@ class ShortsGenerationResult(BaseModel):
             seen_indices.add(short.index)
             if short.index != idx:
                 raise ValueError(f"Generated short index {short.index} must be sequential 1-based (expected {idx})")
+        return self
+
+
+class JobProgress(BaseModel):
+    """Represents a progress update event for a background processing job."""
+
+    status: JobStatus = Field(..., description="Current job status.")
+    progress_percent: float = Field(..., ge=0.0, le=100.0, description="Progress percentage between 0 and 100.")
+    message: str = Field(..., min_length=1, description="Status update message.")
+
+    @model_validator(mode="after")
+    def validate_progress(self) -> "JobProgress":
+        import math
+
+        if not math.isfinite(self.progress_percent):
+            raise ValueError("progress_percent must be a finite number")
+        if not self.message or not self.message.strip():
+            raise ValueError("message cannot be empty or whitespace only")
+        return self
+
+
+class JobRecord(BaseModel):
+    """Represents the complete state of a background shorts generation job in the system."""
+
+    job_id: str = Field(..., min_length=1, description="Unique job identifier.")
+    status: JobStatus = Field(..., description="Current status of the job.")
+    progress_percent: float = Field(default=0.0, ge=0.0, le=100.0, description="Overall progress percentage (0-100).")
+    message: str = Field(default="Job queued", min_length=1, description="Human-readable progress message.")
+    created_at: datetime = Field(..., description="UTC timestamp of when the job was created.")
+    started_at: Optional[datetime] = Field(default=None, description="UTC timestamp of when processing started.")
+    completed_at: Optional[datetime] = Field(default=None, description="UTC timestamp of when the job finished.")
+    error: Optional[str] = Field(default=None, description="Error message if the job failed.")
+    result: Optional[ShortsGenerationResult] = Field(default=None, description="Pipeline result if the job succeeded.")
+    # Request tracking
+    source: Optional[VideoSource] = Field(default=None, description="Source video reference.")
+    clip_duration: Optional[int] = Field(default=None, description="Desired duration of each clip.")
+    number_of_clips: Optional[int] = Field(default=None, description="Number of clips.")
+
+    @model_validator(mode="after")
+    def validate_job_record(self) -> "JobRecord":
+        import math
+
+        if not math.isfinite(self.progress_percent):
+            raise ValueError("progress_percent must be a finite number")
+        if not self.job_id or not self.job_id.strip():
+            raise ValueError("job_id cannot be empty or whitespace only")
+        if self.status == JobStatus.COMPLETED and self.completed_at is None:
+            raise ValueError("Completed jobs must contain a completed_at timestamp")
+        if self.status == JobStatus.FAILED and (not self.error or not self.error.strip()):
+            raise ValueError("Failed jobs must contain a non-empty error message")
+        if self.started_at is not None and self.started_at < self.created_at:
+            raise ValueError("started_at cannot be earlier than created_at")
+        if self.completed_at is not None and self.started_at is not None and self.completed_at < self.started_at:
+            raise ValueError("completed_at cannot be earlier than started_at")
+        if self.completed_at is not None and self.completed_at < self.created_at:
+            raise ValueError("completed_at cannot be earlier than created_at")
         return self
 
 

@@ -4,13 +4,26 @@ These tests also confirm that the pre-existing `GET /` and `GET /health`
 endpoints continue to work after adding the new job creation endpoint.
 """
 
+from concurrent.futures import Future
+from unittest.mock import MagicMock
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models import JobStatus, VideoJobRequest, VideoSource, VideoSourceType
+from app.models import IngestedVideo, JobStatus, VideoJobRequest, VideoSource, VideoSourceType
 from app.services import job_service
+from app.services.job_runner_service import default_job_runner
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def mock_background_runner(monkeypatch):
+    """Prevent background execution threads from attempting real downloads during API unit tests."""
+    mock_submit = MagicMock(return_value=Future())
+    monkeypatch.setattr(default_job_runner, "submit_job", mock_submit)
+    return mock_submit
+
 
 VALID_PAYLOAD = {
     "source": {
@@ -56,14 +69,7 @@ def test_create_job_with_valid_youtube_request_returns_expected_shape():
     assert response.status_code == 200
 
     body = response.json()
-    assert set(body.keys()) == {
-        "job_id",
-        "status",
-        "source",
-        "clip_duration",
-        "number_of_clips",
-        "created_at",
-    }
+    assert {"job_id", "status", "source", "clip_duration", "number_of_clips", "created_at"}.issubset(set(body.keys()))
     assert body["status"] == "queued"
     assert body["source"] == {
         "type": "youtube",
@@ -258,13 +264,21 @@ def test_get_nonexistent_job_returns_404():
 # ---------------------------------------------------------------------
 
 
-def test_job_status_enum_contains_exactly_the_four_allowed_statuses():
-    assert {member.value for member in JobStatus} == {
+def test_job_status_enum_contains_pipeline_statuses():
+    expected = {
         "queued",
-        "processing",
+        "ingesting",
+        "extracting_metadata",
+        "transcribing",
+        "finding_highlights",
+        "generating_clips",
+        "converting_vertical",
+        "adding_captions",
         "completed",
         "failed",
+        "processing",
     }
+    assert {member.value for member in JobStatus} == expected
 
 
 def test_job_status_enum_values_are_plain_strings():
@@ -937,6 +951,105 @@ def test_video_clip_service_missing_output_file(monkeypatch, tmp_path):
 
     with pytest.raises(VideoClipError, match="generated clip was not found"):
         service.create_clip(IngestedVideo(file_path=str(source_file)), req)
+
+
+# ---------------------------------------------------------------------
+# ShortsGenerationRequest POST /api/jobs & JobRecord GET /api/jobs/{id}
+# ---------------------------------------------------------------------
+
+
+def test_create_job_with_shorts_generation_request_payload():
+    payload = {
+        "source": {
+            "type": "upload",
+            "location": "/uploads/my_podcast.mp4",
+        },
+        "clip_duration_seconds": 45.0,
+        "number_of_clips": 3,
+        "include_captions": True,
+        "vertical_width": 1080,
+        "vertical_height": 1920,
+    }
+    response = client.post("/api/jobs", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["progress_percent"] == 0.0
+    assert "job_id" in body
+    assert body["message"] == "Job queued"
+
+
+def test_get_completed_job_record_exposes_results_and_metadata():
+    from app.models import (
+        GeneratedShort,
+        HighlightCandidate,
+        HighlightScore,
+        ShortsGenerationRequest,
+        ShortsGenerationResult,
+        TimestampedTranscript,
+        VideoMetadata,
+    )
+    from app.services.job_service import default_job_service
+
+    req = ShortsGenerationRequest(
+        source=VideoSource(type=VideoSourceType.UPLOAD, location="video.mp4"),
+        clip_duration_seconds=30.0,
+        number_of_clips=1,
+    )
+    job = default_job_service.create_job(req)
+    cand = HighlightCandidate(
+        start_seconds=5.0,
+        end_seconds=35.0,
+        duration_seconds=30.0,
+        text="Hook transcript text",
+        score=HighlightScore(overall=0.95, hook=0.9, emotion=0.9, curiosity=0.9, information_density=0.9),
+    )
+    short = GeneratedShort(
+        index=1,
+        candidate=cand,
+        source_clip_path="clip.mp4",
+        vertical_clip_path="v.mp4",
+        captioned_clip_path="cap.mp4",
+        final_file_path="cap.mp4",
+    )
+    result = ShortsGenerationResult(
+        source_video=IngestedVideo(file_path="video.mp4"),
+        metadata=VideoMetadata(duration_seconds=60.0, width=1920, height=1080, format="mp4", file_size_bytes=2048),
+        transcript=TimestampedTranscript(segments=[]),
+        candidates=[cand],
+        generated_shorts=[short],
+    )
+    default_job_service.complete_job(job.job_id, result)
+
+    response = client.get(f"/api/jobs/{job.job_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["progress_percent"] == 100.0
+    assert body["result"] is not None
+    assert len(body["result"]["generated_shorts"]) == 1
+    assert body["result"]["generated_shorts"][0]["final_file_path"] == "cap.mp4"
+    assert body["result"]["generated_shorts"][0]["candidate"]["score"]["overall"] == 0.95
+
+
+def test_get_failed_job_record_exposes_error():
+    from app.models import ShortsGenerationRequest
+    from app.services.job_service import default_job_service
+
+    req = ShortsGenerationRequest(
+        source=VideoSource(type=VideoSourceType.UPLOAD, location="invalid.mp4"),
+        clip_duration_seconds=30.0,
+        number_of_clips=1,
+    )
+    job = default_job_service.create_job(req)
+    default_job_service.fail_job(job.job_id, "Corrupt audio stream in source video")
+
+    response = client.get(f"/api/jobs/{job.job_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert "Corrupt audio stream" in body["error"]
+
 
 
 
