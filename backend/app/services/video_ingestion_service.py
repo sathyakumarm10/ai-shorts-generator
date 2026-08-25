@@ -84,7 +84,11 @@ class VideoIngestionService:
         if source.type == VideoSourceType.YOUTUBE:
             return self._ingest_youtube(source.location)
         elif source.type == VideoSourceType.UPLOAD:
-            # Upload handling is not yet implemented.
+            # Check if source.location refers to an existing local file
+            local_path = Path(source.location)
+            if local_path.is_file():
+                return IngestedVideo(file_path=str(local_path.resolve()))
+            # Fallback for placeholder non-existent upload paths
             raise NotImplementedError(
                 "Upload video ingestion is not implemented yet."
             )
