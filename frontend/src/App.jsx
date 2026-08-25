@@ -11,6 +11,13 @@ import { uploadVideo, createJob, getJob } from './api/client'
 
 const STORAGE_KEY = 'ai_shorts_generator_history_v1'
 
+function getJobState(job) {
+  if (!job) return 'idle'
+  if (job.status === 'completed') return 'results'
+  if (job.status === 'failed') return 'failed'
+  return 'processing'
+}
+
 export default function App() {
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploadedData, setUploadedData] = useState(null)
@@ -34,12 +41,24 @@ export default function App() {
 
   const pollingRef = useRef(null)
 
-  // Load history from localStorage
+  // Load history from localStorage and resume polling for active jobs after a refresh.
   useEffect(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
-      if (stored) {
-        setHistory(JSON.parse(stored))
+      if (!stored) return
+
+      const parsedHistory = JSON.parse(stored)
+      if (!Array.isArray(parsedHistory)) return
+
+      setHistory(parsedHistory)
+
+      const activeJob = [...parsedHistory]
+        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+        .find((job) => job && job.job_id && job.status !== 'completed' && job.status !== 'failed')
+
+      if (activeJob) {
+        setCurrentJob(activeJob)
+        setJobState(getJobState(activeJob))
       }
     } catch {
       // Ignore parse error
@@ -169,6 +188,8 @@ export default function App() {
     setJobState('idle')
     setCurrentJob(null)
     setError(null)
+    setSelectedFile(null)
+    setUploadedData(null)
   }
 
   const handleSelectHistoryJob = (jobItem) => {
