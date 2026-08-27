@@ -1,10 +1,15 @@
 """Thread-safe Job management service with state machine transitions.
 
-This module provides the `JobService` responsible for in-memory job persistence,
-validating lifecycle state transitions, updating stage progress, and managing terminal states.
+This module provides the `JobService` responsible for persistent job storage
+(via SQLite), validating lifecycle state transitions, updating stage progress,
+and managing terminal states.
+
+Jobs survive backend restarts when a file-backed SQLite database is used.
 """
 
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 import threading
 from typing import Dict, Optional, Set
 from uuid import uuid4
@@ -18,6 +23,7 @@ from app.models import (
     VideoJobRequest,
     VideoSource,
 )
+from app.services.job_sqlite import SQLiteJobStore
 
 
 class JobError(Exception):
@@ -115,11 +121,19 @@ ALLOWED_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
 
 
 class JobService:
-    """Thread-safe service managing job records and state transitions."""
+    """Thread-safe service managing job records and state transitions.
 
-    def __init__(self) -> None:
+    Parameters
+    ----------
+    db_path : str or None
+        Path to the SQLite database file.  ``None`` (the default) creates an
+        ephemeral in-memory database — ideal for unit tests.  Pass a file path
+        for production persistence.
+    """
+
+    def __init__(self, db_path: Optional[str] = None) -> None:
         self._lock = threading.Lock()
-        self._jobs: Dict[str, JobRecord] = {}
+        self._store = SQLiteJobStore(db_path=db_path or ":memory:")
 
     def create_job(self, request: ShortsGenerationRequest | VideoJobRequest) -> JobRecord:
         """Create and register a new job record with initial QUEUED status."""
@@ -149,14 +163,19 @@ class JobService:
         )
 
         with self._lock:
-            self._jobs[job_id] = job
+            try:
+                self._store.insert(job)
+            except Exception as exc:
+                raise JobError(f"Failed to persist new job {job_id}: {exc}") from exc
 
         return job
 
     def get_job(self, job_id: str) -> Optional[JobRecord]:
         """Retrieve a job record by ID in a thread-safe manner."""
-        with self._lock:
-            return self._jobs.get(job_id)
+        try:
+            return self._store.get(job_id)
+        except Exception as exc:
+            raise JobError(f"Failed to retrieve job {job_id}: {exc}") from exc
 
     def update_progress(
         self,
@@ -167,7 +186,7 @@ class JobService:
     ) -> JobRecord:
         """Update a job's status and progress percentage, enforcing valid state transitions."""
         with self._lock:
-            job = self._jobs.get(job_id)
+            job = self._store.get(job_id)
             if job is None:
                 raise JobError(f"Job not found: {job_id}")
 
@@ -192,13 +211,16 @@ class JobService:
                     "started_at": started_at,
                 }
             )
-            self._jobs[job_id] = updated_job
+            try:
+                self._store.update(updated_job)
+            except Exception as exc:
+                raise JobError(f"Failed to persist progress update for job {job_id}: {exc}") from exc
             return updated_job
 
     def complete_job(self, job_id: str, result: ShortsGenerationResult) -> JobRecord:
         """Mark a job as successfully COMPLETED with its final result artifact."""
         with self._lock:
-            job = self._jobs.get(job_id)
+            job = self._store.get(job_id)
             if job is None:
                 raise JobError(f"Job not found: {job_id}")
 
@@ -220,13 +242,16 @@ class JobService:
                     "result": result,
                 }
             )
-            self._jobs[job_id] = completed_job
+            try:
+                self._store.update(completed_job)
+            except Exception as exc:
+                raise JobError(f"Failed to persist completion for job {job_id}: {exc}") from exc
             return completed_job
 
     def fail_job(self, job_id: str, error: str) -> JobRecord:
         """Mark a job as FAILED with an error description."""
         with self._lock:
-            job = self._jobs.get(job_id)
+            job = self._store.get(job_id)
             if job is None:
                 raise JobError(f"Job not found: {job_id}")
 
@@ -248,14 +273,32 @@ class JobService:
                     "completed_at": now,
                 }
             )
-            self._jobs[job_id] = failed_job
+            try:
+                self._store.update(failed_job)
+            except Exception as exc:
+                raise JobError(f"Failed to persist failure for job {job_id}: {exc}") from exc
             return failed_job
 
 
-# Global default instance for application-wide dependency sharing and backward compatibility
-default_job_service = JobService()
+# ---------------------------------------------------------------------------
+# Global default instance
+# ---------------------------------------------------------------------------
 
+# Resolve the default persistent database path.
+# Override with the JOB_DB_PATH environment variable if desired.
+_DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_DEFAULT_DB_PATH = os.environ.get(
+    "JOB_DB_PATH",
+    str(_DEFAULT_DB_DIR / "jobs.sqlite3"),
+)
+
+default_job_service = JobService(db_path=_DEFAULT_DB_PATH)
+
+
+# ---------------------------------------------------------------------------
 # Module-level helpers for backward compatibility
+# ---------------------------------------------------------------------------
+
 def create_job(request: VideoJobRequest | ShortsGenerationRequest) -> JobRecord:
     return default_job_service.create_job(request)
 
@@ -281,7 +324,7 @@ class _JobsProxy(dict):
 
     def __setitem__(self, key: str, value: JobRecord) -> None:
         with default_job_service._lock:
-            default_job_service._jobs[key] = value
+            default_job_service._store.upsert(value)
 
 
 jobs = _JobsProxy()
