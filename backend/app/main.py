@@ -8,7 +8,7 @@ and asynchronous processing to the service layer.
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from app.models import JobRecord, ShortsGenerationRequest, VideoJobRequest
 from app.services.job_runner_service import default_job_runner
 from app.services.job_service import default_job_service
+from app.services.media_storage_service import default_media_storage
 
 # Create the FastAPI application instance.
 app = FastAPI(title="AI Shorts Generator API")
@@ -90,19 +91,61 @@ async def upload_video(file: UploadFile = File(...)) -> Dict[str, Any]:
 
 
 @app.get("/api/media")
-def get_media(file_path: str = Query(..., description="Absolute path to the generated media file")):
+def get_media(
+    file_path: Optional[str] = Query(None, description="Path or relative path to the generated media file"),
+    path: Optional[str] = Query(None, description="Alternative query param for relative media path"),
+):
     """Safely stream or serve generated media assets for in-browser playback and downloads.
 
     Enforces strict security checks:
-    - Resolves symlinks and prevents directory traversal.
-    - Only serves files located within approved media directories (downloads or system temp).
-    - Only serves allowed media extensions.
+    - Resolves relative or absolute paths against approved roots (outputs, downloads, temp).
+    - Resolves symlinks and prevents directory traversal attacks.
+    - Only serves approved media extensions.
     - Read-only; rejects non-existent files or directories.
     """
+    target = path or file_path
+    if not target or not target.strip():
+        raise HTTPException(status_code=400, detail="Media file path query parameter is required")
+
     try:
-        resolved_path = Path(file_path).resolve()
+        raw_path = Path(target)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid media file path")
+
+    approved_roots = [
+        default_media_storage.media_root.resolve(),
+        Path("downloads").resolve(),
+        Path(tempfile.gettempdir()).resolve(),
+    ]
+
+    resolved_path: Optional[Path] = None
+
+    if raw_path.is_absolute():
+        candidate = raw_path.resolve()
+        for root in approved_roots:
+            try:
+                candidate.relative_to(root)
+                resolved_path = candidate
+                break
+            except ValueError:
+                continue
+    else:
+        # Check against each approved root
+        for root in approved_roots:
+            candidate = (root / raw_path).resolve()
+            try:
+                candidate.relative_to(root)
+                if candidate.is_file():
+                    resolved_path = candidate
+                    break
+            except ValueError:
+                continue
+
+    if resolved_path is None:
+        # Try resolving purely to check for path escape vs not found
+        if raw_path.is_absolute():
+            raise HTTPException(status_code=403, detail="Access to the specified media path is forbidden")
+        raise HTTPException(status_code=404, detail="Media file not found")
 
     if not resolved_path.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
@@ -110,20 +153,6 @@ def get_media(file_path: str = Query(..., description="Absolute path to the gene
     # Validate extension
     if resolved_path.suffix.lower() not in ALLOWED_MEDIA_EXTENSIONS:
         raise HTTPException(status_code=403, detail="Forbidden media file type")
-
-    # Security check: Must reside within approved project download or temp directory
-    approved_roots = [
-        Path("downloads").resolve(),
-        Path(tempfile.gettempdir()).resolve(),
-    ]
-
-    is_approved = any(
-        resolved_path == root or root in resolved_path.parents
-        for root in approved_roots
-    )
-
-    if not is_approved:
-        raise HTTPException(status_code=403, detail="Access to the specified media path is forbidden")
 
     media_type = "video/mp4"
     if resolved_path.suffix.lower() in (".srt", ".vtt"):
