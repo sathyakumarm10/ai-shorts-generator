@@ -229,6 +229,13 @@ class HighlightScore(BaseModel):
         return self
 
 
+class HighlightSource(str, Enum):
+    """Source method used to discover and score the highlight candidate."""
+
+    HEURISTIC = "heuristic"
+    AI = "ai"
+
+
 class HighlightCandidate(BaseModel):
     """Represents a potential short-form video clip candidate window derived from transcript segments.
 
@@ -240,6 +247,12 @@ class HighlightCandidate(BaseModel):
     duration_seconds: float = Field(..., gt=0.0, description="Duration of the candidate window in seconds.")
     text: str = Field(..., min_length=1, description="Concatenated transcript text within this candidate window.")
     score: HighlightScore = Field(..., description="Calculated multi-dimensional highlight score.")
+    # Intelligent AI enrichment fields (optional, gracefully defaults for heuristic pipeline)
+    title: Optional[str] = Field(default=None, description="Catchy, descriptive title for the highlight clip.")
+    viral_hook: Optional[str] = Field(default=None, description="Attention-grabbing opening hook for social shorts.")
+    description: Optional[str] = Field(default=None, description="Concise synopsis of the clip content.")
+    reasoning: Optional[str] = Field(default=None, description="Explanation or justification of why this moment is engaging.")
+    source_type: HighlightSource = Field(default=HighlightSource.HEURISTIC, description="Detection origin (ai or heuristic).")
 
     @model_validator(mode="after")
     def validate_candidate(self) -> "HighlightCandidate":
@@ -256,7 +269,7 @@ class HighlightCandidate(BaseModel):
         expected_duration = self.end_seconds - self.start_seconds
         if abs(self.duration_seconds - expected_duration) > 1e-3:
             raise ValueError(
-                f"duration_seconds ({self.duration_seconds}s) does not match end_seconds - start_seconds ({expected_duration}s)"
+                f"duration_seconds ({self.duration_seconds}) must equal end_seconds - start_seconds ({expected_duration:.3f})"
             )
         if not self.text or not self.text.strip():
             raise ValueError("text cannot be empty or whitespace only")

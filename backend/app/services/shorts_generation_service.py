@@ -13,12 +13,14 @@ from app.models import (
     CaptionTrack,
     GeneratedShort,
     HighlightCandidate,
+    HighlightSource,
     JobStatus,
     ShortsGenerationRequest,
     ShortsGenerationResult,
     VerticalVideoRequest,
     VideoSource,
 )
+from app.services.ai_highlight_service import AIHighlightService
 from app.services.caption_burn_service import CaptionBurnError, CaptionBurnService
 from app.services.caption_service import CaptionService, CaptionServiceError
 from app.services.highlight_clip_service import HighlightClipError, HighlightClipService
@@ -48,6 +50,7 @@ class ShortsGenerationService:
         vertical_video_service: Optional[VerticalVideoService] = None,
         caption_service: Optional[CaptionService] = None,
         caption_burn_service: Optional[CaptionBurnService] = None,
+        ai_highlight_service: Optional[AIHighlightService] = None,
     ) -> None:
         self.ingestion_service = ingestion_service or VideoIngestionService()
         self.metadata_service = metadata_service or VideoMetadataService()
@@ -58,6 +61,10 @@ class ShortsGenerationService:
         self.highlight_clip_service = highlight_clip_service or HighlightClipService()
         self.vertical_video_service = vertical_video_service or VerticalVideoService()
         self.caption_service = caption_service or CaptionService()
+        self.caption_burn_service = caption_burn_service or CaptionBurnService(
+            caption_service=self.caption_service
+        )
+        self.ai_highlight_service = ai_highlight_service or AIHighlightService()
         self.caption_burn_service = caption_burn_service or CaptionBurnService(
             caption_service=self.caption_service
         )
@@ -156,16 +163,43 @@ class ShortsGenerationService:
 
         # 4. Highlight detection and candidate generation
         report_progress(JobStatus.FINDING_HIGHLIGHTS, 50.0, "Analyzing transcript for highlights")
+        candidates: List[HighlightCandidate] = []
+
+        # Try AI intelligent candidate extraction first
         try:
-            candidates: List[HighlightCandidate] = self.highlight_scoring_service.generate_candidates(
-                transcript,
+            ai_candidates = self.ai_highlight_service.generate_ai_candidates(
+                transcript=transcript,
                 min_duration=req.min_clip_duration,
                 max_duration=req.max_clip_duration,
                 target_duration=req.clip_duration_seconds,
-                allow_overlap=False,
+                max_clips=req.number_of_clips,
+                video_duration=metadata.duration_seconds,
             )
-        except (HighlightScoringError, Exception) as exc:
-            raise ShortsGenerationError(f"Highlight candidate generation failed: {exc}") from exc
+            if ai_candidates:
+                candidates = ai_candidates
+        except Exception:
+            candidates = []
+
+        # Fallback to deterministic heuristic scoring if AI yielded no valid candidates
+        if not candidates:
+            try:
+                heuristic_candidates: List[HighlightCandidate] = self.highlight_scoring_service.generate_candidates(
+                    transcript,
+                    min_duration=req.min_clip_duration,
+                    max_duration=req.max_clip_duration,
+                    target_duration=req.clip_duration_seconds,
+                    allow_overlap=False,
+                )
+                # Synthesize informative titles and viral hooks for heuristic candidates
+                for i, c in enumerate(heuristic_candidates, start=1):
+                    preview = (c.text[:45] + "...") if len(c.text) > 45 else c.text
+                    c.title = f"Highlight #{i}: {preview}"
+                    c.viral_hook = f"Must Watch: {c.text[:55]}..."
+                    c.description = c.text
+                    c.source_type = HighlightSource.HEURISTIC
+                candidates = heuristic_candidates
+            except (HighlightScoringError, Exception) as exc:
+                raise ShortsGenerationError(f"Highlight candidate generation failed: {exc}") from exc
 
         if not candidates:
             report_progress(JobStatus.COMPLETED, 100.0, "No candidate clips found")

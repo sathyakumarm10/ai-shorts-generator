@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Download, Sparkles, Clock, Check, Copy } from 'lucide-react'
+import { Download, Sparkles, Clock, Check, Copy, Flame, Cpu } from 'lucide-react'
 import { getMediaUrl } from '../api/client'
 
 export function ShortCard({ short }) {
@@ -9,6 +9,10 @@ export function ShortCard({ short }) {
   const score = candidate.score?.overall != null
     ? Math.round(candidate.score.overall * 100)
     : null
+
+  const isAI = candidate.source_type === 'ai'
+  const title = candidate.title
+  const hook = candidate.viral_hook
 
   const handleCopyPath = async () => {
     try {
@@ -46,10 +50,61 @@ export function ShortCard({ short }) {
             {candidate.start_seconds?.toFixed(1)}s &ndash; {candidate.end_seconds?.toFixed(1)}s ({candidate.duration_seconds?.toFixed(1)}s)
           </span>
 
-          <span style={{ color: short.captioned_clip_path ? '#10b981' : 'var(--text-muted)', fontWeight: 600 }}>
-            {short.captioned_clip_path ? 'Captioned' : 'No Captions'}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                fontSize: '0.72rem',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                background: isAI ? 'rgba(139, 92, 246, 0.15)' : 'rgba(100, 116, 139, 0.15)',
+                color: isAI ? '#a78bfa' : '#94a3b8',
+                fontWeight: 600,
+              }}
+            >
+              {isAI ? <Sparkles size={11} /> : <Cpu size={11} />}
+              {isAI ? 'AI Pick' : 'Heuristic'}
+            </span>
+            <span style={{ color: short.captioned_clip_path ? '#10b981' : 'var(--text-muted)', fontWeight: 600 }}>
+              {short.captioned_clip_path ? 'Captioned' : 'No Captions'}
+            </span>
+          </div>
         </div>
+
+        {title && (
+          <div>
+            <h4
+              style={{
+                margin: '0.35rem 0 0.2rem',
+                fontSize: '0.96rem',
+                fontWeight: 700,
+                color: 'var(--text-primary)',
+                lineHeight: 1.3,
+              }}
+            >
+              {title}
+            </h4>
+          </div>
+        )}
+
+        {hook && (
+          <p
+            style={{
+              margin: '0 0 0.35rem',
+              fontSize: '0.82rem',
+              color: '#f59e0b',
+              fontWeight: 500,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            <Flame size={13} />
+            <span>&ldquo;{hook}&rdquo;</span>
+          </p>
+        )}
 
         {candidate.text && (
           <p className="short-transcript-snippet" title={candidate.text}>
