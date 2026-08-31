@@ -11,8 +11,9 @@ import tempfile
 from typing import Optional
 from uuid import uuid4
 
-from app.models import CaptionTrack, IngestedVideo
+from app.models import CaptionPreset, CaptionTrack, IngestedVideo
 from app.services.caption_service import CaptionService
+from app.services.dynamic_caption_service import DynamicCaptionService
 
 # Default output directory for captioned videos, located in ignored `outputs/captioned` area.
 DEFAULT_CAPTIONED_OUTPUT_DIR = Path("outputs") / "captioned"
@@ -28,7 +29,6 @@ class CaptionBurnService:
     """Service responsible for burning styled captions into video frames using FFmpeg."""
 
     # Centralized mobile-optimized subtitle style configuration for 1080x1920 vertical Shorts
-    # Alignment=2 (Bottom-Center), Font size 24, Bold outline, safe bottom margin
     DEFAULT_SUBTITLE_STYLE = (
         "FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=35"
     )
@@ -38,16 +38,19 @@ class CaptionBurnService:
         output_dir: Path | str = DEFAULT_CAPTIONED_OUTPUT_DIR,
         ffmpeg_executable: str = "ffmpeg",
         caption_service: Optional[CaptionService] = None,
+        dynamic_caption_service: Optional[DynamicCaptionService] = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.ffmpeg_executable = ffmpeg_executable
         self.caption_service = caption_service or CaptionService()
+        self.dynamic_caption_service = dynamic_caption_service or DynamicCaptionService()
 
     def burn_captions(
         self,
         video: IngestedVideo | str | Path,
         captions: CaptionTrack,
         output_dir: Optional[Path | str] = None,
+        preset: Optional[CaptionPreset] = None,
     ) -> IngestedVideo:
         """Burn styled captions from a CaptionTrack into the video using FFmpeg subtitles filter.
 
@@ -55,6 +58,7 @@ class CaptionBurnService:
             video: IngestedVideo instance or local path to the input video.
             captions: Validated CaptionTrack containing chronological caption segments.
             output_dir: Optional override directory for rendered output file.
+            preset: Optional CaptionPreset to apply custom styling and word chunking.
 
         Returns:
             IngestedVideo: Contains file path to the newly rendered captioned MP4.
@@ -98,16 +102,26 @@ class CaptionBurnService:
         # Check for FFmpeg executable
         executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable
 
+        # Refine captions track and compute style for the given preset
+        target_preset = preset or CaptionPreset.DEFAULT
+        try:
+            effective_track = self.dynamic_caption_service.create_dynamic_track(captions, preset=target_preset)
+            style_config = self.dynamic_caption_service.get_style_config(target_preset)
+            force_style_str = self.dynamic_caption_service.format_ffmpeg_force_style(style_config)
+        except Exception:
+            effective_track = captions
+            force_style_str = self.DEFAULT_SUBTITLE_STYLE
+
         # Create isolated temporary directory for the intermediate SRT file with automatic cleanup
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_srt_path = Path(temp_dir) / "subtitles.srt"
-            self.caption_service.write_srt(captions, temp_srt_path)
+            self.caption_service.write_srt(effective_track, temp_srt_path)
 
             # Escape path for FFmpeg subtitles filter on Windows / Linux
             # In libavfilter: backslashes become forward slashes and colons must be escaped with \:
             escaped_srt_path = str(temp_srt_path.resolve()).replace("\\", "/").replace(":", "\\:")
 
-            filter_expr = f"subtitles='{escaped_srt_path}':force_style='{self.DEFAULT_SUBTITLE_STYLE}'"
+            filter_expr = f"subtitles='{escaped_srt_path}':force_style='{force_style_str}'"
 
             cmd = [
                 executable,

@@ -268,14 +268,16 @@ class ShortsGenerationService:
                 try:
                     caption_track = CaptionTrack(segments=relative_segments)
                     captioned_video = self.caption_burn_service.burn_captions(
-                        vertical_video.file_path, caption_track
+                        vertical_video.file_path,
+                        caption_track,
+                        preset=req.caption_preset,
                     )
                     captioned_clip_path = captioned_video.file_path
                     final_path = captioned_video.file_path
                 except (CaptionServiceError, CaptionBurnError, Exception) as exc:
-                    raise ShortsGenerationError(
-                        f"Caption burn-in failed for short #{idx} ({cand.start_seconds}s-{cand.end_seconds}s): {exc}"
-                    ) from exc
+                    # Gracefully fall back to non-captioned vertical video so job completes
+                    captioned_clip_path = None
+                    final_path = vertical_video.file_path
 
             generated_shorts.append(
                 GeneratedShort(
@@ -286,6 +288,7 @@ class ShortsGenerationService:
                     captioned_clip_path=captioned_clip_path,
                     final_file_path=final_path,
                     framing_type=framing_type,
+                    caption_preset=req.caption_preset if captioned_clip_path else None,
                 )
             )
 

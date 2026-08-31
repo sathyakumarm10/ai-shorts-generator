@@ -83,8 +83,20 @@ export function ShortCard({ short }) {
                 Smart Framing
               </span>
             )}
-            <span style={{ color: short.captioned_clip_path ? '#10b981' : 'var(--text-muted)', fontWeight: 600 }}>
-              {short.captioned_clip_path ? 'Captioned' : 'No Captions'}
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                fontSize: '0.72rem',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                background: short.captioned_clip_path ? 'rgba(16, 185, 129, 0.15)' : 'rgba(100, 116, 139, 0.15)',
+                color: short.captioned_clip_path ? '#10b981' : 'var(--text-muted)',
+                fontWeight: 600,
+                textTransform: 'capitalize',
+              }}
+            >
+              {short.captioned_clip_path ? `${short.caption_preset || 'Dynamic'} Captions` : 'No Captions'}
             </span>
           </div>
         </div>

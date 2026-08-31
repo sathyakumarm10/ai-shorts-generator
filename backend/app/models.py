@@ -379,6 +379,16 @@ class CaptionTrack(BaseModel):
         return self
 
 
+class CaptionPreset(str, Enum):
+    """Preset styles for dynamic social media captions."""
+
+    DEFAULT = "default"
+    KARAOKE = "karaoke"
+    HIGHLIGHT = "highlight"
+    BOLD = "bold"
+    MINIMAL = "minimal"
+
+
 class ShortsGenerationRequest(BaseModel):
     """Request parameters for orchestrating end-to-end automatic Shorts generation."""
 
@@ -390,6 +400,7 @@ class ShortsGenerationRequest(BaseModel):
     vertical_width: int = Field(default=1080, gt=0, description="Target vertical video width in pixels.")
     vertical_height: int = Field(default=1920, gt=0, description="Target vertical video height in pixels.")
     include_captions: bool = Field(default=True, description="Whether to generate and burn captions into the output video.")
+    caption_preset: CaptionPreset = Field(default=CaptionPreset.DEFAULT, description="Caption styling preset.")
 
     @model_validator(mode="before")
     @classmethod
@@ -449,6 +460,7 @@ class GeneratedShort(BaseModel):
     captioned_clip_path: Optional[str] = Field(default=None, description="File path to the captioned video (if captions requested).")
     final_file_path: str = Field(..., min_length=1, description="File path to the final output video deliverable.")
     framing_type: FramingType = Field(default=FramingType.CENTER_CROP, description="Framing method used for 9:16 vertical transformation.")
+    caption_preset: Optional[CaptionPreset] = Field(default=None, description="Caption preset applied to this short.")
 
     @model_validator(mode="after")
     def validate_paths(self) -> "GeneratedShort":

@@ -92,6 +92,42 @@ export function GenerationSettings({
           </label>
         </div>
 
+        {/* Caption Style Preset Selector */}
+        {settings.includeCaptions && (
+          <div className="setting-item" style={{ marginTop: '0.5rem' }}>
+            <div className="setting-label-row">
+              <span className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <Sparkles size={14} color="#a855f7" />
+                Caption Style
+              </span>
+            </div>
+            <select
+              value={settings.captionPreset || 'default'}
+              onChange={(e) => onChange({ ...settings, captionPreset: e.target.value })}
+              disabled={isSubmitting}
+              aria-label="Select caption style preset"
+              style={{
+                width: '100%',
+                padding: '0.6rem 0.8rem',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)',
+                color: 'var(--text-primary)',
+                fontSize: '0.88rem',
+                outline: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="default" style={{ background: '#1e1b4b', color: '#fff' }}>Default (Clean White with Dark Border)</option>
+              <option value="karaoke" style={{ background: '#1e1b4b', color: '#fff' }}>Karaoke (Energetic Gold Pop)</option>
+              <option value="highlight" style={{ background: '#1e1b4b', color: '#fff' }}>Highlight (Electric Cyan Accent)</option>
+              <option value="bold" style={{ background: '#1e1b4b', color: '#fff' }}>Bold (High-Impact Heavy Block)</option>
+              <option value="minimal" style={{ background: '#1e1b4b', color: '#fff' }}>Minimal (Subtle Clean Text)</option>
+            </select>
+            <span className="setting-helper">Select social media typography and color theme for burned subtitles.</span>
+          </div>
+        )}
+
         {/* Framing specs note */}
         <div style={{ padding: '0.75rem 1rem', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
           Output Format: <strong>1080 &times; 1920 (9:16 Vertical)</strong> &bull; H.264 &bull; AAC Audio

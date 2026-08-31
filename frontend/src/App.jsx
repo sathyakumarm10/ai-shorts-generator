@@ -133,6 +133,7 @@ export default function App() {
       clip_duration_seconds: Number(settings.clipDurationSeconds),
       number_of_clips: Number(settings.numberOfClips),
       include_captions: Boolean(settings.includeCaptions),
+      caption_preset: settings.captionPreset || 'default',
       min_clip_duration: Number(settings.minClipDuration),
       max_clip_duration: Number(settings.maxClipDuration),
       vertical_width: 1080,
