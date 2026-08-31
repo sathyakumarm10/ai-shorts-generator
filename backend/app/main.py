@@ -8,19 +8,34 @@ and asynchronous processing to the service layer.
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Security, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import ValidationError
 
-from app.models import JobRecord, ShortsGenerationRequest, VideoJobRequest
+from app.models import (
+    JobRecord,
+    ShortsGenerationRequest,
+    TokenResponse,
+    User,
+    UserCreate,
+    UserLogin,
+    UserResponse,
+    VideoJobRequest,
+)
+from app.services.auth_service import (
+    default_auth_service,
+    get_current_user,
+    get_optional_user,
+)
 from app.services.job_runner_service import default_job_runner
 from app.services.job_service import default_job_service
 from app.services.media_storage_service import default_media_storage
+from app.services.storage_service import default_storage_service
 
 # Create the FastAPI application instance.
 app = FastAPI(title="AI Shorts Generator API")
@@ -36,7 +51,7 @@ app.add_middleware(
 
 UPLOAD_DIR = Path("downloads") / "uploads"
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
-ALLOWED_MEDIA_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".aac", ".mp3", ".wav", ".srt", ".vtt"}
+ALLOWED_MEDIA_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".aac", ".mp3", ".wav", ".srt", ".vtt", ".ass"}
 
 
 @app.get("/")
@@ -51,13 +66,71 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.post("/api/upload")
-async def upload_video(file: UploadFile = File(...)) -> Dict[str, Any]:
-    """Securely upload a video file for local processing.
+# ---------------------------------------------------------------------------
+# Authentication Routes
+# ---------------------------------------------------------------------------
 
-    Validates file extension, assigns a safe unique filename, and saves the file
-    to the server's approved upload directory.
-    """
+
+@app.post("/api/auth/register", response_model=TokenResponse)
+def register(payload: UserCreate) -> TokenResponse:
+    """Register a new user account with unique email and secure hashed password."""
+    return default_auth_service.register_user(payload)
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+def login(payload: UserLogin) -> TokenResponse:
+    """Authenticate with email and password and return a JWT access token."""
+    return default_auth_service.authenticate_user(payload)
+
+
+@app.get("/api/auth/me", response_model=UserResponse)
+def get_current_user_profile(current_user: User = Depends(get_current_user)) -> UserResponse:
+    """Return the profile of the currently authenticated user."""
+    return UserResponse(
+        user_id=current_user.user_id,
+        email=current_user.email,
+        created_at=current_user.created_at,
+    )
+
+
+@app.post("/api/auth/refresh", response_model=TokenResponse)
+def refresh_token(current_user: User = Depends(get_current_user)) -> TokenResponse:
+    """Refresh the access token for the active authenticated user."""
+    from app.services.auth_service import ACCESS_TOKEN_EXPIRE_MINUTES, create_jwt_token
+    expires_seconds = ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    token = create_jwt_token(
+        payload={"sub": current_user.user_id, "email": current_user.email},
+        expires_in_seconds=expires_seconds,
+    )
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in=expires_seconds,
+        user=UserResponse(
+            user_id=current_user.user_id,
+            email=current_user.email,
+            created_at=current_user.created_at,
+        ),
+    )
+
+
+@app.post("/api/auth/logout")
+def logout(current_user: User = Depends(get_current_user)) -> Dict[str, Any]:
+    """Logout endpoint."""
+    return {"message": "Logged out successfully."}
+
+
+# ---------------------------------------------------------------------------
+# Media & Upload Routes
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/upload")
+async def upload_video(
+    file: UploadFile = File(...),
+    current_user: Optional[User] = Depends(get_optional_user),
+) -> Dict[str, Any]:
+    """Securely upload a video file for local processing."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided in upload")
 
@@ -68,9 +141,12 @@ async def upload_video(file: UploadFile = File(...)) -> Dict[str, Any]:
             detail=f"Unsupported file format '{original_ext}'. Allowed formats: {', '.join(sorted(ALLOWED_VIDEO_EXTENSIONS))}",
         )
 
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    # If authenticated, isolate upload in user-scoped subdirectory
+    user_prefix = current_user.user_id if current_user else "anonymous"
+    user_upload_dir = UPLOAD_DIR / user_prefix
+    user_upload_dir.mkdir(parents=True, exist_ok=True)
     safe_name = f"upload_{uuid4().hex}{original_ext}"
-    dest_path = UPLOAD_DIR / safe_name
+    dest_path = user_upload_dir / safe_name
 
     try:
         with dest_path.open("wb") as buffer:
@@ -94,18 +170,16 @@ async def upload_video(file: UploadFile = File(...)) -> Dict[str, Any]:
 def get_media(
     file_path: Optional[str] = Query(None, description="Path or relative path to the generated media file"),
     path: Optional[str] = Query(None, description="Alternative query param for relative media path"),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
-    """Safely stream or serve generated media assets for in-browser playback and downloads.
-
-    Enforces strict security checks:
-    - Resolves relative or absolute paths against approved roots (outputs, downloads, temp).
-    - Resolves symlinks and prevents directory traversal attacks.
-    - Only serves approved media extensions.
-    - Read-only; rejects non-existent files or directories.
-    """
+    """Safely stream or serve generated media assets for in-browser playback and downloads."""
     target = path or file_path
     if not target or not target.strip():
         raise HTTPException(status_code=400, detail="Media file path query parameter is required")
+
+    # If target is an S3 signed URL, redirect to cloud storage
+    if target.startswith("http://") or target.startswith("https://"):
+        return RedirectResponse(url=target)
 
     try:
         raw_path = Path(target)
@@ -130,7 +204,6 @@ def get_media(
             except ValueError:
                 continue
     else:
-        # Check against each approved root
         for root in approved_roots:
             candidate = (root / raw_path).resolve()
             try:
@@ -142,7 +215,6 @@ def get_media(
                 continue
 
     if resolved_path is None:
-        # Try resolving purely to check for path escape vs not found
         if raw_path.is_absolute():
             raise HTTPException(status_code=403, detail="Access to the specified media path is forbidden")
         raise HTTPException(status_code=404, detail="Media file not found")
@@ -150,12 +222,26 @@ def get_media(
     if not resolved_path.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
 
-    # Validate extension
+    # IDOR / User media isolation check: if path contains `jobs/{job_id}`, verify user ownership
+    path_str = resolved_path.as_posix()
+    if "/jobs/" in path_str:
+        try:
+            parts = path_str.split("/jobs/")[1].split("/")
+            job_id = parts[0]
+            job = default_job_service.get_job(job_id)
+            if job and job.user_id:
+                if not current_user or current_user.user_id != job.user_id:
+                    raise HTTPException(status_code=403, detail="Forbidden: You do not own this media artifact.")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
     if resolved_path.suffix.lower() not in ALLOWED_MEDIA_EXTENSIONS:
         raise HTTPException(status_code=403, detail="Forbidden media file type")
 
     media_type = "video/mp4"
-    if resolved_path.suffix.lower() in (".srt", ".vtt"):
+    if resolved_path.suffix.lower() in (".srt", ".vtt", ".ass"):
         media_type = "text/plain"
     elif resolved_path.suffix.lower() in (".aac", ".mp3", ".wav"):
         media_type = f"audio/{resolved_path.suffix.lower().lstrip('.')}"
@@ -167,17 +253,29 @@ def get_media(
     )
 
 
-@app.post("/api/jobs", response_model=JobRecord)
-def create_job(payload: Dict[str, Any]) -> JobRecord:
-    """Create and submit a new background shorts generation job.
+# ---------------------------------------------------------------------------
+# Jobs Management Routes (Multi-User Isolated)
+# ---------------------------------------------------------------------------
 
-    FastAPI parses and validates the incoming JSON body. The job is registered
-    in the job store with initial QUEUED status, submitted to the background
-    thread pool executor, and returns immediately without blocking.
-    """
+
+@app.get("/api/jobs", response_model=List[JobRecord])
+def list_jobs(current_user: Optional[User] = Depends(get_optional_user)) -> List[JobRecord]:
+    """List jobs scoped to the current user (or legacy/all jobs if unauthenticated)."""
+    user_id = current_user.user_id if current_user else None
+    return default_job_service.list_jobs(user_id=user_id)
+
+
+@app.post("/api/jobs", response_model=JobRecord)
+def create_job(
+    payload: Dict[str, Any],
+    current_user: Optional[User] = Depends(get_optional_user),
+) -> JobRecord:
+    """Create and submit a new background shorts generation job attached to current user."""
+    user_id = current_user.user_id if current_user else None
     if "clip_duration_seconds" in payload:
         try:
-            shorts_req = ShortsGenerationRequest.model_validate(payload)
+            data = {**payload, "user_id": user_id}
+            shorts_req = ShortsGenerationRequest.model_validate(data)
         except ValidationError as exc:
             raise RequestValidationError(errors=exc.errors()) from exc
     else:
@@ -187,23 +285,46 @@ def create_job(payload: Dict[str, Any]) -> JobRecord:
                 source=legacy_req.source,
                 clip_duration_seconds=float(legacy_req.clip_duration),
                 number_of_clips=legacy_req.number_of_clips,
+                user_id=user_id,
             )
         except ValidationError as exc:
             raise RequestValidationError(errors=exc.errors()) from exc
 
-    job_record = default_job_service.create_job(shorts_req)
+    job_record = default_job_service.create_job(shorts_req, user_id=user_id)
     default_job_runner.submit_job(job_record.job_id, shorts_req)
     return job_record
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobRecord)
-def get_job(job_id: str) -> JobRecord:
-    """Retrieve an existing video processing job by its job ID.
-
-    Returns the current JobRecord with stage progress and completed results if finished.
-    If the job does not exist, an HTTP 404 is raised.
-    """
+def get_job(
+    job_id: str,
+    current_user: Optional[User] = Depends(get_optional_user),
+) -> JobRecord:
+    """Retrieve an existing job, verifying user ownership to prevent IDOR vulnerabilities."""
     job = default_job_service.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # If job is owned by a user, enforce that requester matches owner
+    if job.user_id:
+        if not current_user or current_user.user_id != job.user_id:
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job.")
+
     return job
+
+
+@app.delete("/api/jobs/{job_id}")
+def delete_job(
+    job_id: str,
+    current_user: Optional[User] = Depends(get_optional_user),
+) -> Dict[str, Any]:
+    """Delete a job record, ensuring only the owner can delete it."""
+    job = default_job_service.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.user_id and (not current_user or current_user.user_id != job.user_id):
+        raise HTTPException(status_code=403, detail="Forbidden: You cannot delete another user's job.")
+
+    default_job_service.delete_job(job_id, user_id=current_user.user_id if current_user else None)
+    return {"message": "Job deleted successfully."}

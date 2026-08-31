@@ -135,10 +135,16 @@ class JobService:
         self._lock = threading.Lock()
         self._store = SQLiteJobStore(db_path=db_path or ":memory:")
 
-    def create_job(self, request: ShortsGenerationRequest | VideoJobRequest) -> JobRecord:
+    def create_job(
+        self,
+        request: ShortsGenerationRequest | VideoJobRequest,
+        user_id: Optional[str] = None,
+    ) -> JobRecord:
         """Create and register a new job record with initial QUEUED status."""
         job_id = str(uuid4())
         now = datetime.now(timezone.utc)
+
+        effective_user_id = user_id or getattr(request, "user_id", None)
 
         if isinstance(request, ShortsGenerationRequest):
             source = request.source
@@ -160,6 +166,7 @@ class JobService:
             source=source,
             clip_duration=clip_duration,
             number_of_clips=number_of_clips,
+            user_id=effective_user_id,
         )
 
         with self._lock:
@@ -170,12 +177,32 @@ class JobService:
 
         return job
 
-    def get_job(self, job_id: str) -> Optional[JobRecord]:
-        """Retrieve a job record by ID in a thread-safe manner."""
+    def get_job(self, job_id: str, user_id: Optional[str] = None) -> Optional[JobRecord]:
+        """Retrieve a job record by ID in a thread-safe manner, optionally checking user ownership."""
         try:
-            return self._store.get(job_id)
+            job = self._store.get(job_id)
+            if job is None:
+                return None
+            if user_id is not None and job.user_id is not None and job.user_id != user_id:
+                return None
+            return job
         except Exception as exc:
             raise JobError(f"Failed to retrieve job {job_id}: {exc}") from exc
+
+    def list_jobs(self, user_id: Optional[str] = None) -> list[JobRecord]:
+        """List jobs owned by user_id."""
+        with self._lock:
+            return self._store.list_by_user(user_id)
+
+    def delete_job(self, job_id: str, user_id: Optional[str] = None) -> bool:
+        """Delete a job if user owns it."""
+        with self._lock:
+            job = self._store.get(job_id)
+            if job is None:
+                return False
+            if user_id is not None and job.user_id is not None and job.user_id != user_id:
+                return False
+            return self._store.delete(job_id)
 
     def update_progress(
         self,

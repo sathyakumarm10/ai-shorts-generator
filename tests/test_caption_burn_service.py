@@ -102,6 +102,34 @@ class TestCaptionBurnServiceUnit:
         assert Path(result.file_path).is_file()
 
     @patch("subprocess.run")
+    def test_ffmpeg_karaoke_ass_command_structure(
+        self, mock_run: MagicMock, tmp_path: Path, sample_caption_track: CaptionTrack
+    ):
+        out_dir = tmp_path / "captioned_output"
+        service = CaptionBurnService(output_dir=out_dir)
+
+        source_file = tmp_path / "source.mp4"
+        source_file.write_bytes(b"mock_source_mp4_bytes")
+
+        def side_effect(cmd, **kwargs):
+            out_file = Path(cmd[-1])
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_bytes(b"mock_captioned_mp4_data")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = side_effect
+
+        result = service.burn_captions(source_file, sample_caption_track, enable_karaoke=True)
+
+        assert mock_run.called
+        cmd = mock_run.call_args[0][0]
+        assert "-vf" in cmd
+        filter_str = cmd[cmd.index("-vf") + 1]
+        assert "ass=" in filter_str
+        assert ".ass" in filter_str
+        assert isinstance(result, IngestedVideo)
+
+    @patch("subprocess.run")
     def test_ffmpeg_failure_raises_caption_burn_error(
         self, mock_run: MagicMock, tmp_path: Path, sample_caption_track: CaptionTrack
     ):

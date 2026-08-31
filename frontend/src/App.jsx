@@ -6,8 +6,10 @@ import { GenerationSettings } from './components/GenerationSettings'
 import { ProcessingView } from './components/ProcessingView'
 import { ResultsGrid } from './components/ResultsGrid'
 import { JobHistoryModal } from './components/JobHistoryModal'
+import { AuthModal } from './components/AuthModal'
 import { ErrorBanner } from './components/ErrorBanner'
-import { uploadVideo, createJob, getJob } from './api/client'
+import { uploadVideo, createJob, getJob, listJobs } from './api/client'
+import { AuthProvider, useAuth } from './context/AuthContext'
 
 const STORAGE_KEY = 'ai_shorts_generator_history_v1'
 
@@ -18,7 +20,7 @@ function getJobState(job) {
   return 'processing'
 }
 
-export default function App() {
+function MainApp() {
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploadedData, setUploadedData] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
@@ -28,6 +30,8 @@ export default function App() {
     numberOfClips: 3,
     clipDurationSeconds: 60,
     includeCaptions: true,
+    captionPreset: 'default',
+    enableKaraoke: true,
     minClipDuration: 30,
     maxClipDuration: 120,
   })
@@ -38,32 +42,53 @@ export default function App() {
 
   const [history, setHistory] = useState([])
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
+  const [isAuthOpen, setIsAuthOpen] = useState(false)
 
+  const { user } = useAuth()
   const pollingRef = useRef(null)
 
-  // Load history from localStorage and resume polling for active jobs after a refresh.
+  // Fetch jobs for authenticated user or fallback to localStorage
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      if (!stored) return
-
-      const parsedHistory = JSON.parse(stored)
-      if (!Array.isArray(parsedHistory)) return
-
-      setHistory(parsedHistory)
-
-      const activeJob = [...parsedHistory]
-        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-        .find((job) => job && job.job_id && job.status !== 'completed' && job.status !== 'failed')
-
-      if (activeJob) {
-        setCurrentJob(activeJob)
-        setJobState(getJobState(activeJob))
+    async function loadUserJobs() {
+      if (user) {
+        try {
+          const userJobs = await listJobs()
+          if (Array.isArray(userJobs) && userJobs.length > 0) {
+            setHistory(userJobs)
+            const active = userJobs.find(j => j.status !== 'completed' && j.status !== 'failed')
+            if (active) {
+              setCurrentJob(active)
+              setJobState(getJobState(active))
+            }
+            return
+          }
+        } catch {
+          // fallback
+        }
       }
-    } catch {
-      // Ignore parse error
+
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY)
+        if (!stored) return
+        const parsedHistory = JSON.parse(stored)
+        if (!Array.isArray(parsedHistory)) return
+        setHistory(parsedHistory)
+
+        const activeJob = [...parsedHistory]
+          .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+          .find((job) => job && job.job_id && job.status !== 'completed' && job.status !== 'failed')
+
+        if (activeJob) {
+          setCurrentJob(activeJob)
+          setJobState(getJobState(activeJob))
+        }
+      } catch {
+        // Ignore parse error
+      }
     }
-  }, [])
+
+    loadUserJobs()
+  }, [user])
 
   // Save history to localStorage
   const saveToHistory = (jobRecord, sourceName) => {
@@ -115,6 +140,14 @@ export default function App() {
     setError(null)
   }
 
+  const handleReset = () => {
+    setJobState('idle')
+    setCurrentJob(null)
+    setError(null)
+    setSelectedFile(null)
+    setUploadedData(null)
+  }
+
   // Handle generation submission
   const handleGenerate = async () => {
     if (!uploadedData?.file_path) {
@@ -134,6 +167,7 @@ export default function App() {
       number_of_clips: Number(settings.numberOfClips),
       include_captions: Boolean(settings.includeCaptions),
       caption_preset: settings.captionPreset || 'default',
+      enable_karaoke: Boolean(settings.enableKaraoke !== false),
       min_clip_duration: Number(settings.minClipDuration),
       max_clip_duration: Number(settings.maxClipDuration),
       vertical_width: 1080,
@@ -167,31 +201,23 @@ export default function App() {
 
         if (latestJob.status === 'completed') {
           setJobState('results')
+          clearInterval(pollingRef.current)
         } else if (latestJob.status === 'failed') {
           setJobState('failed')
-          setError(latestJob.error || 'Video processing failed')
+          setError(latestJob.error || 'Job failed during video processing')
+          clearInterval(pollingRef.current)
         }
       } catch (err) {
-        // Network blip - don't fail immediately, continue polling
+        // Network blip
       }
     }
 
-    // Immediate first poll, then repeat every 1.8s
     poll()
     pollingRef.current = setInterval(poll, 1800)
-
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current)
     }
   }, [jobState, currentJob?.job_id])
-
-  const handleReset = () => {
-    setJobState('idle')
-    setCurrentJob(null)
-    setError(null)
-    setSelectedFile(null)
-    setUploadedData(null)
-  }
 
   const handleSelectHistoryJob = (jobItem) => {
     setCurrentJob(jobItem)
@@ -203,6 +229,7 @@ export default function App() {
     } else {
       setJobState('processing')
     }
+    setIsHistoryOpen(false)
   }
 
   const handleClearHistory = () => {
@@ -211,10 +238,11 @@ export default function App() {
   }
 
   return (
-    <>
+    <div className="app-container">
       <Navbar
         onOpenHistory={() => setIsHistoryOpen(true)}
         historyCount={history.length}
+        onOpenAuth={() => setIsAuthOpen(true)}
       />
 
       <main className="container" style={{ flex: 1, paddingBottom: '3rem' }}>
@@ -255,17 +283,18 @@ export default function App() {
           />
         )}
 
-        {jobState === 'results' && (
+        {jobState === 'results' && currentJob?.result && (
           <ResultsGrid
-            result={currentJob?.result}
+            result={currentJob.result}
+            jobId={currentJob.job_id}
             onReset={handleReset}
           />
         )}
 
         {jobState === 'failed' && (
           <div style={{ textAlign: 'center', marginTop: '2rem' }}>
-            <button type="button" className="btn-primary" onClick={handleReset} style={{ maxWidth: '240px', margin: '0 auto' }}>
-              Create New Job
+            <button type="button" className="btn-primary" onClick={handleReset}>
+              Create Another Short
             </button>
           </div>
         )}
@@ -278,6 +307,19 @@ export default function App() {
         onSelectJob={handleSelectHistoryJob}
         onClearHistory={handleClearHistory}
       />
-    </>
+
+      <AuthModal
+        isOpen={isAuthOpen}
+        onClose={() => setIsAuthOpen(false)}
+      />
+    </div>
+  )
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <MainApp />
+    </AuthProvider>
   )
 }

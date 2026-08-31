@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     result_json       TEXT,
     source_json       TEXT,
     clip_duration     INTEGER,
-    number_of_clips   INTEGER
+    number_of_clips   INTEGER,
+    user_id           TEXT
 );
 """
 
@@ -43,8 +44,8 @@ INSERT INTO jobs (
     job_id, status, progress_percent, message,
     created_at, started_at, completed_at,
     error, result_json, source_json,
-    clip_duration, number_of_clips
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    clip_duration, number_of_clips, user_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 _UPDATE_SQL = """\
@@ -55,7 +56,8 @@ UPDATE jobs SET
     started_at       = ?,
     completed_at     = ?,
     error            = ?,
-    result_json      = ?
+    result_json      = ?,
+    user_id          = ?
 WHERE job_id = ?;
 """
 
@@ -64,11 +66,14 @@ INSERT OR REPLACE INTO jobs (
     job_id, status, progress_percent, message,
     created_at, started_at, completed_at,
     error, result_json, source_json,
-    clip_duration, number_of_clips
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    clip_duration, number_of_clips, user_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 _SELECT_SQL = "SELECT * FROM jobs WHERE job_id = ?;"
+_SELECT_BY_USER_SQL = "SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC;"
+_SELECT_ALL_SQL = "SELECT * FROM jobs ORDER BY created_at DESC;"
+_DELETE_SQL = "DELETE FROM jobs WHERE job_id = ?;"
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +106,7 @@ def _job_to_row(job: JobRecord) -> tuple:
         job.source.model_dump_json() if job.source else None,
         job.clip_duration,
         job.number_of_clips,
+        job.user_id,
     )
 
 
@@ -113,6 +119,13 @@ def _row_to_job(row: sqlite3.Row) -> JobRecord:
     source: Optional[VideoSource] = None
     if row["source_json"]:
         source = VideoSource.model_validate_json(row["source_json"])
+
+    # Safe handling of user_id for backward compatibility
+    user_id: Optional[str] = None
+    try:
+        user_id = row["user_id"]
+    except (IndexError, KeyError):
+        user_id = None
 
     return JobRecord(
         job_id=row["job_id"],
@@ -127,6 +140,7 @@ def _row_to_job(row: sqlite3.Row) -> JobRecord:
         source=source,
         clip_duration=row["clip_duration"],
         number_of_clips=row["number_of_clips"],
+        user_id=user_id,
     )
 
 
@@ -179,24 +193,49 @@ class SQLiteJobStore:
     def _init_schema(self) -> None:
         conn = self._connect()
         conn.execute(_CREATE_TABLE_SQL)
+        # Additive migration: check if user_id column exists
+        cursor = conn.execute("PRAGMA table_info(jobs);")
+        columns = [row["name"] for row in cursor.fetchall()]
+        if "user_id" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN user_id TEXT;")
+            except Exception:
+                pass
         conn.commit()
 
     # -- CRUD ---------------------------------------------------------------
 
     def insert(self, job: JobRecord) -> None:
-        """Insert a brand-new JobRecord.  Raises on duplicate job_id."""
+        """Insert a brand-new JobRecord. Raises on duplicate job_id."""
         row = _job_to_row(job)
         with self._connect() as conn:
             conn.execute(_INSERT_SQL, row)
 
     def get(self, job_id: str) -> Optional[JobRecord]:
-        """Fetch a single job by ID, or return *None*."""
+        """Fetch a single job by ID, or return None."""
         with self._connect() as conn:
             cursor = conn.execute(_SELECT_SQL, (job_id,))
             row = cursor.fetchone()
         if row is None:
             return None
         return _row_to_job(row)
+
+    def list_by_user(self, user_id: Optional[str] = None) -> list[JobRecord]:
+        """Fetch jobs owned by a specific user (or all jobs if user_id is None)."""
+        with self._connect() as conn:
+            if user_id:
+                cursor = conn.execute(_SELECT_BY_USER_SQL, (user_id,))
+            else:
+                cursor = conn.execute(_SELECT_ALL_SQL)
+            rows = cursor.fetchall()
+        return [_row_to_job(r) for r in rows]
+
+    def delete(self, job_id: str) -> bool:
+        """Delete a job record by ID."""
+        with self._connect() as conn:
+            cursor = conn.execute(_DELETE_SQL, (job_id,))
+            conn.commit()
+            return cursor.rowcount > 0
 
     def update(self, job: JobRecord) -> None:
         """Update mutable columns of an existing job (status, progress, etc.)."""
@@ -208,6 +247,7 @@ class SQLiteJobStore:
             _dt_to_str(job.completed_at),
             job.error,
             job.result.model_dump_json() if job.result else None,
+            job.user_id,
             job.job_id,
         )
         with self._connect() as conn:

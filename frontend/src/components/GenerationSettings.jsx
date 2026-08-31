@@ -94,38 +94,66 @@ export function GenerationSettings({
 
         {/* Caption Style Preset Selector */}
         {settings.includeCaptions && (
-          <div className="setting-item" style={{ marginTop: '0.5rem' }}>
-            <div className="setting-label-row">
-              <span className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <Sparkles size={14} color="#a855f7" />
-                Caption Style
-              </span>
+          <>
+            <div className="setting-item" style={{ marginTop: '0.5rem' }}>
+              <div className="setting-label-row">
+                <span className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Sparkles size={14} color="#a855f7" />
+                  Caption Style
+                </span>
+              </div>
+              <select
+                value={settings.captionPreset || 'default'}
+                onChange={(e) => onChange({ ...settings, captionPreset: e.target.value })}
+                disabled={isSubmitting}
+                aria-label="Select caption style preset"
+                style={{
+                  width: '100%',
+                  padding: '0.6rem 0.8rem',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.88rem',
+                  outline: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                <option value="default" style={{ background: '#1e1b4b', color: '#fff' }}>Default (Clean White with Dark Border)</option>
+                <option value="classic_karaoke" style={{ background: '#1e1b4b', color: '#fff' }}>Classic Karaoke (Energetic Gold Pop)</option>
+                <option value="karaoke" style={{ background: '#1e1b4b', color: '#fff' }}>Karaoke (Gold Pop Accent)</option>
+                <option value="word_highlight" style={{ background: '#1e1b4b', color: '#fff' }}>Word Highlight (Electric Cyan Accent)</option>
+                <option value="highlight" style={{ background: '#1e1b4b', color: '#fff' }}>Highlight (Cyan Theme)</option>
+                <option value="punch_pop" style={{ background: '#1e1b4b', color: '#fff' }}>Punch / Pop (High-Impact Heavy Block)</option>
+                <option value="bold" style={{ background: '#1e1b4b', color: '#fff' }}>Bold (Heavy Outline Block)</option>
+                <option value="clean_creator" style={{ background: '#1e1b4b', color: '#fff' }}>Clean Creator (Subtle Minimal Text)</option>
+                <option value="minimal" style={{ background: '#1e1b4b', color: '#fff' }}>Minimal (Subtle Clean Text)</option>
+              </select>
+              <span className="setting-helper">Select social media typography and color theme for burned subtitles.</span>
             </div>
-            <select
-              value={settings.captionPreset || 'default'}
-              onChange={(e) => onChange({ ...settings, captionPreset: e.target.value })}
-              disabled={isSubmitting}
-              aria-label="Select caption style preset"
-              style={{
-                width: '100%',
-                padding: '0.6rem 0.8rem',
-                background: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-sm)',
-                color: 'var(--text-primary)',
-                fontSize: '0.88rem',
-                outline: 'none',
-                cursor: 'pointer',
-              }}
-            >
-              <option value="default" style={{ background: '#1e1b4b', color: '#fff' }}>Default (Clean White with Dark Border)</option>
-              <option value="karaoke" style={{ background: '#1e1b4b', color: '#fff' }}>Karaoke (Energetic Gold Pop)</option>
-              <option value="highlight" style={{ background: '#1e1b4b', color: '#fff' }}>Highlight (Electric Cyan Accent)</option>
-              <option value="bold" style={{ background: '#1e1b4b', color: '#fff' }}>Bold (High-Impact Heavy Block)</option>
-              <option value="minimal" style={{ background: '#1e1b4b', color: '#fff' }}>Minimal (Subtle Clean Text)</option>
-            </select>
-            <span className="setting-helper">Select social media typography and color theme for burned subtitles.</span>
-          </div>
+
+            {/* Karaoke Animation Toggle */}
+            <div className="toggle-row" style={{ marginTop: '0.6rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.75rem' }}>
+              <div>
+                <div className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Sparkles size={14} color="#f59e0b" />
+                  <span>Word-by-Word Karaoke Animation</span>
+                </div>
+                <div className="setting-helper">Synchronize active spoken word highlighting with speech audio.</div>
+              </div>
+
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={settings.enableKaraoke !== false}
+                  onChange={(e) => handleToggleChange('enableKaraoke', e.target.checked)}
+                  disabled={isSubmitting}
+                  aria-label="Toggle karaoke word animation"
+                />
+                <span className="slider"></span>
+              </label>
+            </div>
+          </>
         )}
 
         {/* Framing specs note */}

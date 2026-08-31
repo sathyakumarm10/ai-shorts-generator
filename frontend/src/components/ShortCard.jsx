@@ -83,6 +83,22 @@ export function ShortCard({ short }) {
                 Smart Framing
               </span>
             )}
+            {short.is_karaoke && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  fontSize: '0.72rem',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  background: 'rgba(245, 158, 11, 0.15)',
+                  color: '#f59e0b',
+                  fontWeight: 600,
+                }}
+              >
+                Karaoke FX
+              </span>
+            )}
             <span
               style={{
                 display: 'inline-flex',

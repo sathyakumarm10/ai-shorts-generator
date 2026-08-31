@@ -8,9 +8,72 @@ API expects and returns without reading through business logic.
 
 from datetime import datetime
 from enum import Enum
+import re
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, HttpUrl, TypeAdapter, model_validator
+from pydantic import BaseModel, EmailStr, Field, HttpUrl, TypeAdapter, model_validator
+
+
+class UserRole(str, Enum):
+    """User role enumeration."""
+
+    USER = "user"
+    ADMIN = "admin"
+
+
+class User(BaseModel):
+    """Represents an internal registered user record."""
+
+    user_id: str = Field(..., min_length=1, description="Unique user identifier.")
+    email: str = Field(..., min_length=3, description="User's email address.")
+    password_hash: str = Field(..., min_length=1, description="PBKDF2-SHA256 password hash.")
+    created_at: datetime = Field(..., description="UTC creation timestamp.")
+    updated_at: datetime = Field(..., description="UTC update timestamp.")
+
+
+class UserCreate(BaseModel):
+    """Request payload for user registration."""
+
+    email: str = Field(..., min_length=3, max_length=255, description="Valid email address.")
+    password: str = Field(..., min_length=6, max_length=128, description="User password (min 6 chars).")
+
+    @model_validator(mode="after")
+    def validate_email_format(self) -> "UserCreate":
+        self.email = self.email.strip().lower()
+        if not re.match(r"^[^@]+@[^@]+\.[^@]+$", self.email):
+            raise ValueError("Invalid email address format.")
+        if len(self.password) < 6:
+            raise ValueError("Password must be at least 6 characters.")
+        return self
+
+
+class UserLogin(BaseModel):
+    """Request payload for user login."""
+
+    email: str = Field(..., min_length=3, description="User email.")
+    password: str = Field(..., min_length=1, description="User password.")
+
+    @model_validator(mode="after")
+    def clean_login_email(self) -> "UserLogin":
+        self.email = self.email.strip().lower()
+        return self
+
+
+class UserResponse(BaseModel):
+    """Safe user profile response without sensitive credentials."""
+
+    user_id: str = Field(..., description="User unique identifier.")
+    email: str = Field(..., description="User email address.")
+    created_at: datetime = Field(..., description="Registration timestamp.")
+
+
+class TokenResponse(BaseModel):
+    """JWT authentication token response."""
+
+    access_token: str = Field(..., description="JWT Bearer access token.")
+    token_type: str = Field(default="bearer", description="Token type.")
+    expires_in: int = Field(..., description="Seconds until expiration.")
+    user: UserResponse = Field(..., description="Authenticated user info.")
 
 
 class JobStatus(str, Enum):
@@ -387,6 +450,10 @@ class CaptionPreset(str, Enum):
     HIGHLIGHT = "highlight"
     BOLD = "bold"
     MINIMAL = "minimal"
+    CLASSIC_KARAOKE = "classic_karaoke"
+    PUNCH_POP = "punch_pop"
+    WORD_HIGHLIGHT = "word_highlight"
+    CLEAN_CREATOR = "clean_creator"
 
 
 class ShortsGenerationRequest(BaseModel):
@@ -401,6 +468,9 @@ class ShortsGenerationRequest(BaseModel):
     vertical_height: int = Field(default=1920, gt=0, description="Target vertical video height in pixels.")
     include_captions: bool = Field(default=True, description="Whether to generate and burn captions into the output video.")
     caption_preset: CaptionPreset = Field(default=CaptionPreset.DEFAULT, description="Caption styling preset.")
+    enable_karaoke: bool = Field(default=True, description="Whether to apply active word-by-word karaoke highlighting.")
+    karaoke_active_color: Optional[str] = Field(default=None, description="Custom active word highlight color in ASS hex (e.g. &H0000D7FF).")
+    user_id: Optional[str] = Field(default=None, description="Owning user identifier.")
 
     @model_validator(mode="before")
     @classmethod
@@ -411,6 +481,8 @@ class ShortsGenerationRequest(BaseModel):
                     raise ValueError(f"{field_name} cannot be a boolean value")
             if "include_captions" in data and not isinstance(data["include_captions"], bool):
                 raise ValueError("include_captions must be a boolean value")
+            if "enable_karaoke" in data and not isinstance(data["enable_karaoke"], bool):
+                raise ValueError("enable_karaoke must be a boolean value")
         return data
 
     @model_validator(mode="after")
@@ -461,6 +533,7 @@ class GeneratedShort(BaseModel):
     final_file_path: str = Field(..., min_length=1, description="File path to the final output video deliverable.")
     framing_type: FramingType = Field(default=FramingType.CENTER_CROP, description="Framing method used for 9:16 vertical transformation.")
     caption_preset: Optional[CaptionPreset] = Field(default=None, description="Caption preset applied to this short.")
+    is_karaoke: bool = Field(default=False, description="Whether active word karaoke animation was applied.")
 
     @model_validator(mode="after")
     def validate_paths(self) -> "GeneratedShort":
@@ -474,16 +547,22 @@ class GeneratedShort(BaseModel):
 
 
 class ShortsGenerationResult(BaseModel):
-    """Complete output payload from the ShortsGenerationService pipeline."""
+    """Encapsulates the complete final result of a successful end-to-end generation job."""
 
-    source_video: IngestedVideo = Field(..., description="Ingested original source video.")
-    metadata: VideoMetadata = Field(..., description="Extracted video metadata.")
-    transcript: TimestampedTranscript = Field(..., description="Timestamped transcription of speech.")
-    candidates: list[HighlightCandidate] = Field(..., description="Ranked highlight candidates detected.")
-    generated_shorts: list[GeneratedShort] = Field(..., description="Final rendered short videos.")
+    source_video: IngestedVideo = Field(..., description="The ingested source video record.")
+    metadata: VideoMetadata = Field(..., description="Technical metadata of the source video.")
+    transcript: TimestampedTranscript = Field(..., description="Timestamped transcription of the source audio.")
+    candidates: list[HighlightCandidate] = Field(
+        default_factory=list,
+        description="Ranked candidate highlight windows discovered in the video.",
+    )
+    generated_shorts: list[GeneratedShort] = Field(
+        default_factory=list,
+        description="List of rendered short video artifacts generated from top candidates.",
+    )
 
     @model_validator(mode="after")
-    def validate_result_shorts(self) -> "ShortsGenerationResult":
+    def validate_result(self) -> "ShortsGenerationResult":
         seen_indices = set()
         for idx, short in enumerate(self.generated_shorts, start=1):
             if short.index in seen_indices:
@@ -524,7 +603,8 @@ class JobRecord(BaseModel):
     completed_at: Optional[datetime] = Field(default=None, description="UTC timestamp of when the job finished.")
     error: Optional[str] = Field(default=None, description="Error message if the job failed.")
     result: Optional[ShortsGenerationResult] = Field(default=None, description="Pipeline result if the job succeeded.")
-    # Request tracking
+    # Request tracking & User ownership
+    user_id: Optional[str] = Field(default=None, description="Owning user identifier.")
     source: Optional[VideoSource] = Field(default=None, description="Source video reference.")
     clip_duration: Optional[int] = Field(default=None, description="Desired duration of each clip.")
     number_of_clips: Optional[int] = Field(default=None, description="Number of clips.")

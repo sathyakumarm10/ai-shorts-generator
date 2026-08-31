@@ -66,9 +66,6 @@ class ShortsGenerationService:
             caption_service=self.caption_service
         )
         self.ai_highlight_service = ai_highlight_service or AIHighlightService()
-        self.caption_burn_service = caption_burn_service or CaptionBurnService(
-            caption_service=self.caption_service
-        )
 
     def generate(
         self,
@@ -271,6 +268,8 @@ class ShortsGenerationService:
                         vertical_video.file_path,
                         caption_track,
                         preset=req.caption_preset,
+                        enable_karaoke=getattr(req, "enable_karaoke", True),
+                        karaoke_active_color=getattr(req, "karaoke_active_color", None),
                     )
                     captioned_clip_path = captioned_video.file_path
                     final_path = captioned_video.file_path
@@ -289,6 +288,7 @@ class ShortsGenerationService:
                     final_file_path=final_path,
                     framing_type=framing_type,
                     caption_preset=req.caption_preset if captioned_clip_path else None,
+                    is_karaoke=bool(captioned_clip_path and getattr(req, "enable_karaoke", True)),
                 )
             )
 
