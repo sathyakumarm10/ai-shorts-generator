@@ -11,6 +11,7 @@ from typing import Callable, List, Optional
 from app.models import (
     CaptionSegment,
     CaptionTrack,
+    FramingType,
     GeneratedShort,
     HighlightCandidate,
     HighlightSource,
@@ -228,7 +229,7 @@ class ShortsGenerationService:
             cand = clip.candidate
 
             # Convert to vertical 9:16
-            report_progress(JobStatus.CONVERTING_VERTICAL, 80.0, f"Converting short #{idx} to 9:16 vertical format")
+            report_progress(JobStatus.CONVERTING_VERTICAL, 80.0, f"Converting short #{idx} to 9:16 vertical format (smart framing)")
             try:
                 vert_req = VerticalVideoRequest(width=req.vertical_width, height=req.vertical_height)
                 vertical_video = self.vertical_video_service.convert_to_vertical(clip.file_path, vert_req)
@@ -237,6 +238,7 @@ class ShortsGenerationService:
                     f"Vertical 9:16 conversion failed for short #{idx} ({cand.start_seconds}s-{cand.end_seconds}s): {exc}"
                 ) from exc
 
+            framing_type = vertical_video.framing_type or FramingType.CENTER_CROP
             captioned_clip_path: Optional[str] = None
             final_path = vertical_video.file_path
 
@@ -283,6 +285,7 @@ class ShortsGenerationService:
                     vertical_clip_path=vertical_video.file_path,
                     captioned_clip_path=captioned_clip_path,
                     final_file_path=final_path,
+                    framing_type=framing_type,
                 )
             )
 

@@ -80,6 +80,10 @@ class IngestedVideo(BaseModel):
         min_length=1,
         description="Local file path or reference to the ingested video file.",
     )
+    framing_type: Optional[FramingType] = Field(
+        default=None,
+        description="Framing type applied to this video (e.g. center_crop or smart_framing).",
+    )
 
 
 class VideoMetadata(BaseModel):
@@ -428,6 +432,13 @@ class ShortsGenerationRequest(BaseModel):
         return self
 
 
+class FramingType(str, Enum):
+    """Framing mode applied during 9:16 vertical video conversion."""
+
+    SMART_FRAMING = "smart_framing"
+    CENTER_CROP = "center_crop"
+
+
 class GeneratedShort(BaseModel):
     """Represents a fully generated Short video artifact through the rendering pipeline."""
 
@@ -437,6 +448,7 @@ class GeneratedShort(BaseModel):
     vertical_clip_path: str = Field(..., min_length=1, description="File path to the 9:16 vertical video.")
     captioned_clip_path: Optional[str] = Field(default=None, description="File path to the captioned video (if captions requested).")
     final_file_path: str = Field(..., min_length=1, description="File path to the final output video deliverable.")
+    framing_type: FramingType = Field(default=FramingType.CENTER_CROP, description="Framing method used for 9:16 vertical transformation.")
 
     @model_validator(mode="after")
     def validate_paths(self) -> "GeneratedShort":

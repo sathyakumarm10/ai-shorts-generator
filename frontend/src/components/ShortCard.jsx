@@ -67,6 +67,22 @@ export function ShortCard({ short }) {
               {isAI ? <Sparkles size={11} /> : <Cpu size={11} />}
               {isAI ? 'AI Pick' : 'Heuristic'}
             </span>
+            {short.framing_type === 'smart_framing' && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  fontSize: '0.72rem',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  background: 'rgba(56, 189, 248, 0.15)',
+                  color: '#38bdf8',
+                  fontWeight: 600,
+                }}
+              >
+                Smart Framing
+              </span>
+            )}
             <span style={{ color: short.captioned_clip_path ? '#10b981' : 'var(--text-muted)', fontWeight: 600 }}>
               {short.captioned_clip_path ? 'Captioned' : 'No Captions'}
             </span>

@@ -8,10 +8,11 @@ without distorting or stretching the original aspect ratio.
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Optional
+from typing import Optional, Tuple
 from uuid import uuid4
 
-from app.models import IngestedVideo, VerticalVideoRequest
+from app.models import FramingType, IngestedVideo, VerticalVideoRequest
+from app.services.smart_framing_service import SmartFramingPlan, SmartFramingService
 
 # Default directory for generated vertical clips, located in the ignored `outputs/vertical` area.
 DEFAULT_VERTICAL_OUTPUT_DIR = Path("outputs") / "vertical"
@@ -30,23 +31,31 @@ class VerticalVideoService:
         self,
         output_dir: Path | str = DEFAULT_VERTICAL_OUTPUT_DIR,
         ffmpeg_executable: str = "ffmpeg",
+        smart_framing_service: Optional[SmartFramingService] = None,
+        enable_smart_framing: bool = True,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.ffmpeg_executable = ffmpeg_executable
+        self.smart_framing_service = smart_framing_service or SmartFramingService(
+            ffmpeg_executable=self.ffmpeg_executable
+        )
+        self.enable_smart_framing = enable_smart_framing
 
     def convert_to_vertical(
         self,
         video: IngestedVideo | str | Path,
         request: Optional[VerticalVideoRequest] = None,
+        use_smart_framing: Optional[bool] = None,
     ) -> IngestedVideo:
-        """Convert a video file into a 9:16 vertical MP4 video using scale and center-crop.
+        """Convert a video file into a 9:16 vertical MP4 video using scale and smart or center-crop.
 
         Args:
             video: An IngestedVideo model or local file path to the source video.
             request: Optional VerticalVideoRequest specifying target width and height (defaults to 1080x1920).
+            use_smart_framing: Optional flag overriding whether to attempt dynamic smart speaker framing.
 
         Returns:
-            IngestedVideo: Contains the local file path to the newly generated vertical MP4 video.
+            IngestedVideo: Contains file_path and framing_type for the vertical MP4 video.
 
         Raises:
             VerticalVideoError: If source video is missing/empty, request is invalid,
@@ -89,9 +98,35 @@ class VerticalVideoService:
         # Check for FFmpeg executable
         executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable
 
-        # Build FFmpeg command with safe list of arguments (shell=False)
-        # Using scale-before-crop to cover the 9:16 frame then center-crop the excess area
-        filter_expr = f"scale={req.width}:{req.height}:force_original_aspect_ratio=increase,crop={req.width}:{req.height}"
+        # Determine framing plan (Smart framing vs center crop)
+        should_smart_frame = self.enable_smart_framing if use_smart_framing is None else use_smart_framing
+        framing_plan = SmartFramingPlan(
+            framing_type=FramingType.CENTER_CROP,
+            crop_x_expr="(in_w-out_w)/2",
+            target_crop_x_normalized=0.5,
+            confidence=0.0,
+        )
+
+        if should_smart_frame:
+            try:
+                detections = self.smart_framing_service.detect_focal_points_ffmpeg(source_path)
+                framing_plan = self.smart_framing_service.compute_framing_plan(
+                    detections=detections,
+                    target_width=req.width,
+                    target_height=req.height,
+                )
+            except Exception:
+                # Safe fallback to center crop
+                framing_plan = SmartFramingPlan(
+                    framing_type=FramingType.CENTER_CROP,
+                    crop_x_expr="(in_w-out_w)/2",
+                    target_crop_x_normalized=0.5,
+                    confidence=0.0,
+                )
+
+        # Build FFmpeg filter expression with smart or center crop
+        crop_x = framing_plan.crop_x_expr
+        filter_expr = f"scale={req.width}:{req.height}:force_original_aspect_ratio=increase,crop={req.width}:{req.height}:{crop_x}:(in_h-out_h)/2"
 
         cmd = [
             executable,
@@ -143,4 +178,7 @@ class VerticalVideoService:
         except OSError as exc:
             raise VerticalVideoError(f"Could not verify generated vertical video file: {exc}") from exc
 
-        return IngestedVideo(file_path=str(output_path))
+        return IngestedVideo(
+            file_path=str(output_path),
+            framing_type=framing_plan.framing_type,
+        )
