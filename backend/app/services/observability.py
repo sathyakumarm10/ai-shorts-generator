@@ -334,7 +334,8 @@ class MetricsCollector:
         """Collect current process runtime memory and system metrics."""
         memory_info: Dict[str, Any] = {"rss_bytes": 0, "rss_mb": 0.0}
         try:
-            import psutil
+            import importlib
+            psutil = importlib.import_module("psutil")
             process = psutil.Process()
             mem = process.memory_info()
             memory_info["rss_bytes"] = mem.rss
