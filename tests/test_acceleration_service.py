@@ -67,6 +67,24 @@ class TestHardwareAccelerationService:
         assert service.is_cuda_available() is True
         assert service.get_cuda_device_count() == 1
 
+    def test_cuda_detection_via_optional_torch(self, monkeypatch):
+        import sys
+
+        # Simulate ctranslate2 unavailable
+        monkeypatch.setitem(sys.modules, "ctranslate2", None)
+
+        # Simulate torch available dynamically
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = True
+        mock_torch.cuda.device_count.return_value = 2
+        mock_torch.cuda.get_device_name.return_value = "NVIDIA RTX 4080"
+        monkeypatch.setitem(sys.modules, "torch", mock_torch)
+
+        service = HardwareAccelerationService(config=AccelerationConfig(device_mode=DeviceMode.AUTO))
+        assert service.is_cuda_available() is True
+        assert service.get_cuda_device_count() == 2
+        assert service.get_cuda_device_names() == ["NVIDIA RTX 4080", "NVIDIA RTX 4080"]
+
     def test_cuda_detection_failure_gracefully_handled(self):
         service = HardwareAccelerationService(config=AccelerationConfig(device_mode=DeviceMode.AUTO))
         service._cuda_available_cache = False

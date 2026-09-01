@@ -8,6 +8,7 @@ acceleration is unavailable or fails at runtime.
 
 from dataclasses import dataclass, field
 from enum import Enum
+import importlib
 import logging
 import os
 from pathlib import Path
@@ -120,11 +121,11 @@ class HardwareAccelerationService:
 
         # Fallback probe via PyTorch if installed
         try:
-            import torch
-
-            if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            torch_mod = importlib.import_module("torch")
+            torch_cuda = getattr(torch_mod, "cuda", None)
+            if torch_cuda and torch_cuda.is_available() and torch_cuda.device_count() > 0:
                 self._cuda_available_cache = True
-                self._cuda_device_count_cache = torch.cuda.device_count()
+                self._cuda_device_count_cache = torch_cuda.device_count()
                 return True
         except Exception:
             pass
@@ -166,11 +167,11 @@ class HardwareAccelerationService:
 
         names: List[str] = []
         try:
-            import torch
-
-            if torch.cuda.is_available():
-                for idx in range(torch.cuda.device_count()):
-                    names.append(torch.cuda.get_device_name(idx))
+            torch_mod = importlib.import_module("torch")
+            torch_cuda = getattr(torch_mod, "cuda", None)
+            if torch_cuda and torch_cuda.is_available():
+                for idx in range(torch_cuda.device_count()):
+                    names.append(torch_cuda.get_device_name(idx))
                 self._cuda_device_names_cache = names
                 return names
         except Exception:
