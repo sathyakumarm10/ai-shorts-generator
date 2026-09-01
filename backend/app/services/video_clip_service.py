@@ -11,6 +11,7 @@ from typing import Optional
 from uuid import uuid4
 
 from app.models import IngestedVideo, VideoClipRequest, VideoMetadata
+from app.services.acceleration_service import HardwareAccelerationService, default_acceleration_service
 
 # Default directory for generated clips, located in the ignored `outputs/clips` area.
 DEFAULT_OUTPUT_DIR = Path("outputs") / "clips"
@@ -29,9 +30,11 @@ class VideoClipService:
         self,
         output_dir: Path | str = DEFAULT_OUTPUT_DIR,
         ffmpeg_executable: str = "ffmpeg",
+        acceleration_service: Optional[HardwareAccelerationService] = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.ffmpeg_executable = ffmpeg_executable
+        self.acceleration_service = acceleration_service or default_acceleration_service
 
     def create_clip(
         self,
@@ -81,31 +84,35 @@ class VideoClipService:
         executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable
 
         # Build FFmpeg command with safe list of arguments (shell=False)
-        # Using -ss before -i for fast seeking, and re-encoding to standard H.264/AAC for compatibility
-        cmd = [
-            executable,
-            "-y",  # Overwrite output file if exists (unique name prevents accidental collisions)
-            "-ss",
-            str(clip_request.start_seconds),
-            "-i",
-            str(input_path),
-            "-t",
-            str(clip_request.duration_seconds),
-            "-c:v",
-            "libx264",
-            "-c:a",
-            "aac",
-            "-movflags",
-            "+faststart",
-            str(output_path),
-        ]
+        def build_cmd(use_nvenc: bool) -> list[str]:
+            v_flags = ["-c:v", "h264_nvenc", "-preset", "p4"] if use_nvenc else ["-c:v", "libx264"]
+            return [
+                executable,
+                "-y",  # Overwrite output file if exists
+                "-ss",
+                str(clip_request.start_seconds),
+                "-i",
+                str(input_path),
+                "-t",
+                str(clip_request.duration_seconds),
+                *v_flags,
+                "-c:a",
+                "aac",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+
+        def validator() -> bool:
+            return output_path.is_file() and output_path.stat().st_size > 0
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
+            result = self.acceleration_service.run_ffmpeg_with_fallback(
+                command_builder=build_cmd,
+                output_file_validator=validator,
+                ffmpeg_executable=self.ffmpeg_executable,
             )
         except FileNotFoundError as exc:
             raise VideoClipError(

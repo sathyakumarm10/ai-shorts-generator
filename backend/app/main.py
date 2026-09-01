@@ -28,6 +28,7 @@ from app.models import (
     UserResponse,
     VideoJobRequest,
 )
+from app.services.acceleration_service import default_acceleration_service
 from app.services.auth_service import (
     default_auth_service,
     get_current_user,
@@ -71,6 +72,22 @@ def read_root():
 def health_check():
     """Simple health check endpoint used to verify the service is alive."""
     return {"status": "ok"}
+
+
+@app.get("/api/system/acceleration")
+def get_acceleration_status() -> Dict[str, Any]:
+    """Retrieve runtime GPU/CPU hardware acceleration diagnostics and active encoder capabilities."""
+    report = default_acceleration_service.get_acceleration_report()
+    return {
+        "cuda_available": report.cuda_available,
+        "cuda_device_count": report.cuda_device_count,
+        "cuda_device_names": report.cuda_device_names,
+        "nvenc_available": report.nvenc_available,
+        "configured_device_mode": report.configured_device_mode,
+        "effective_whisper_device": report.effective_whisper_device,
+        "effective_whisper_compute_type": report.effective_whisper_compute_type,
+        "effective_video_encoder": report.effective_video_encoder,
+    }
 
 
 # ---------------------------------------------------------------------------

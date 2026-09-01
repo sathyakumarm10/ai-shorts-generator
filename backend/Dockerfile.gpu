@@ -1,0 +1,71 @@
+# ==============================================================================
+# AI Shorts Generator - Production NVIDIA CUDA GPU Accelerated Dockerfile
+# ==============================================================================
+# Base Image: NVIDIA CUDA 12.4.1 Runtime on Ubuntu 22.04 with CTranslate2 & NVENC
+# ==============================================================================
+
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+# Prevent interactive prompts during apt installation
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT=8000 \
+    HOST=0.0.0.0 \
+    HF_HOME=/app/model_cache \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
+    ACCELERATION_DEVICE=auto \
+    WHISPER_DEVICE=auto \
+    WHISPER_COMPUTE_TYPE=auto \
+    FFMPEG_ACCELERATION=auto
+
+WORKDIR /app
+
+# Install system dependencies:
+# - software-properties-common: for managing PPAs (Python 3.12)
+# - ffmpeg: audio/video trimming, vertical conversion, subtitle burning with NVENC
+# - libgomp1: OpenMP shared library for CTranslate2 / faster-whisper
+# - fontconfig & fonts-dejavu-core: font rendering for ASS/SRT caption overlays
+# - ca-certificates: TLS/HTTPS verification
+# - curl: container healthcheck probing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    ca-certificates \
+    curl \
+    fontconfig \
+    fonts-dejavu-core \
+    libgomp1 \
+    ffmpeg \
+    && add-apt-repository ppa:deadsnakes/ppa -y \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Link python3.12 to default python / python3
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+# Install Python application dependencies
+COPY backend/requirements.txt /app/requirements.txt
+RUN python3.12 -m pip install --no-cache-dir --upgrade pip && \
+    python3.12 -m pip install --no-cache-dir -r /app/requirements.txt
+
+# Create application data, output, upload, and model cache directories
+RUN mkdir -p /app/data /app/outputs /app/downloads/uploads /app/model_cache
+
+# Copy application source code
+COPY backend/app /app/app
+
+# Expose FastAPI HTTP port
+EXPOSE 8000
+
+# Container healthcheck against /health endpoint
+HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Start FastAPI application via Uvicorn ASGI server
+CMD ["python3.12", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -12,6 +12,7 @@ from typing import Optional
 from uuid import uuid4
 
 from app.models import CaptionPreset, CaptionTrack, IngestedVideo
+from app.services.acceleration_service import HardwareAccelerationService, default_acceleration_service
 from app.services.caption_service import CaptionService
 from app.services.dynamic_caption_service import DynamicCaptionService
 from app.services.karaoke_caption_service import KaraokeCaptionService
@@ -40,12 +41,14 @@ class CaptionBurnService:
         caption_service: Optional[CaptionService] = None,
         dynamic_caption_service: Optional[DynamicCaptionService] = None,
         karaoke_caption_service: Optional[KaraokeCaptionService] = None,
+        acceleration_service: Optional[HardwareAccelerationService] = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.ffmpeg_executable = ffmpeg_executable
         self.caption_service = caption_service or CaptionService()
         self.dynamic_caption_service = dynamic_caption_service or DynamicCaptionService()
         self.karaoke_caption_service = karaoke_caption_service or KaraokeCaptionService()
+        self.acceleration_service = acceleration_service or default_acceleration_service
 
     def burn_captions(
         self,
@@ -101,6 +104,9 @@ class CaptionBurnService:
 
         target_preset = preset or CaptionPreset.DEFAULT
 
+        def validator() -> bool:
+            return output_path.is_file() and output_path.stat().st_size > 0
+
         # Try ASS karaoke burn-in first if enabled
         if enable_karaoke:
             try:
@@ -115,25 +121,31 @@ class CaptionBurnService:
                     escaped_ass_path = str(temp_ass_path.resolve()).replace("\\", "/").replace(":", "\\:")
                     filter_expr = f"ass='{escaped_ass_path}'"
 
-                    cmd = [
-                        executable,
-                        "-y",
-                        "-i",
-                        str(source_path),
-                        "-vf",
-                        filter_expr,
-                        "-c:v",
-                        "libx264",
-                        "-c:a",
-                        "aac",
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-movflags",
-                        "+faststart",
-                        str(output_path),
-                    ]
-                    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-                    if res.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
+                    def build_ass_cmd(use_nvenc: bool) -> list[str]:
+                        v_flags = ["-c:v", "h264_nvenc", "-preset", "p4"] if use_nvenc else ["-c:v", "libx264"]
+                        return [
+                            executable,
+                            "-y",
+                            "-i",
+                            str(source_path),
+                            "-vf",
+                            filter_expr,
+                            *v_flags,
+                            "-c:a",
+                            "aac",
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-movflags",
+                            "+faststart",
+                            str(output_path),
+                        ]
+
+                    res = self.acceleration_service.run_ffmpeg_with_fallback(
+                        command_builder=build_ass_cmd,
+                        output_file_validator=validator,
+                        ffmpeg_executable=self.ffmpeg_executable,
+                    )
+                    if res.returncode == 0 and validator():
                         return IngestedVideo(file_path=str(output_path))
             except Exception:
                 # Automatic fallback to standard SRT/dynamic caption rendering
@@ -155,26 +167,31 @@ class CaptionBurnService:
             escaped_srt_path = str(temp_srt_path.resolve()).replace("\\", "/").replace(":", "\\:")
             filter_expr = f"subtitles='{escaped_srt_path}':force_style='{force_style_str}'"
 
-            cmd = [
-                executable,
-                "-y",
-                "-i",
-                str(source_path),
-                "-vf",
-                filter_expr,
-                "-c:v",
-                "libx264",
-                "-c:a",
-                "aac",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                str(output_path),
-            ]
+            def build_srt_cmd(use_nvenc: bool) -> list[str]:
+                v_flags = ["-c:v", "h264_nvenc", "-preset", "p4"] if use_nvenc else ["-c:v", "libx264"]
+                return [
+                    executable,
+                    "-y",
+                    "-i",
+                    str(source_path),
+                    "-vf",
+                    filter_expr,
+                    *v_flags,
+                    "-c:a",
+                    "aac",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(output_path),
+                ]
 
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                result = self.acceleration_service.run_ffmpeg_with_fallback(
+                    command_builder=build_srt_cmd,
+                    output_file_validator=validator,
+                    ffmpeg_executable=self.ffmpeg_executable,
+                )
             except FileNotFoundError as exc:
                 raise CaptionBurnError(f"FFmpeg executable '{self.ffmpeg_executable}' not found on system path.") from exc
             except Exception as exc:
@@ -184,7 +201,7 @@ class CaptionBurnService:
                 err_msg = result.stderr.strip() or "Unknown FFmpeg subtitle error"
                 raise CaptionBurnError(f"FFmpeg caption burn-in failed: {err_msg}")
 
-        if not output_path.is_file() or output_path.stat().st_size <= 0:
+        if not validator():
             raise CaptionBurnError(f"Generated captioned video was not found or is empty at: {output_path}")
 
         return IngestedVideo(file_path=str(output_path))

@@ -36,6 +36,10 @@ services:
       - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
       - S3_PUBLIC_BASE_URL=${S3_PUBLIC_BASE_URL:-}
       - HF_HOME=/app/model_cache
+      - ACCELERATION_DEVICE=${ACCELERATION_DEVICE:-auto}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-auto}
+      - FFMPEG_ACCELERATION=${FFMPEG_ACCELERATION:-auto}
     volumes:
       # Persistent SQLite databases (jobs & users)
       - ai_shorts_data:/app/data

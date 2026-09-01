@@ -54,29 +54,55 @@ class PlaceholderTranscriptionProvider(TranscriptionProvider):
         )
 
 
+import logging
+from app.services.acceleration_service import HardwareAccelerationService, default_acceleration_service
+
+logger = logging.getLogger(__name__)
+
+
 class FasterWhisperTranscriptionProvider(TranscriptionProvider):
-    """Concrete local speech-to-text transcription provider using faster-whisper (CTranslate2)."""
+    """Concrete speech-to-text transcription provider using faster-whisper with GPU/CPU auto-selection."""
 
     def __init__(
         self,
         model_size: str = "tiny",
-        device: str = "cpu",
-        compute_type: str = "int8",
+        device: str = "auto",
+        compute_type: str = "auto",
         language: Optional[str] = None,
         download_root: Optional[str | Path] = None,
         lazy_load: bool = True,
+        acceleration_service: Optional[HardwareAccelerationService] = None,
     ) -> None:
         self.model_size = model_size
-        self.device = device
-        self.compute_type = compute_type
+        self.requested_device = device
+        self.requested_compute_type = compute_type
         self.language = language
         self.download_root = str(download_root) if download_root else None
+        self.acceleration_service = acceleration_service or default_acceleration_service
+
+        # Resolve effective device and compute type
+        eff_dev, eff_comp = self.acceleration_service.resolve_whisper_device_and_compute_type(
+            device_override=None if device == "auto" else device,
+            compute_override=None if compute_type == "auto" else compute_type,
+        )
+        self.device = eff_dev
+        self.compute_type = eff_comp
         self._model = None
         if not lazy_load:
             self._get_model()
 
+    @property
+    def effective_device(self) -> str:
+        """Return the current active execution device ('cuda' or 'cpu')."""
+        return self.device
+
+    @property
+    def effective_compute_type(self) -> str:
+        """Return the current active compute precision type."""
+        return self.compute_type
+
     def _get_model(self):
-        """Lazy loader for the WhisperModel instance."""
+        """Lazy loader for the WhisperModel instance with transparent CPU fallback on GPU failure."""
         if self._model is None:
             try:
                 from faster_whisper import WhisperModel
@@ -88,13 +114,35 @@ class FasterWhisperTranscriptionProvider(TranscriptionProvider):
                     download_root=self.download_root,
                 )
             except Exception as exc:
+                if self.device == "cuda":
+                    logger.warning(
+                        f"Failed to load FasterWhisper model '{self.model_size}' on CUDA ({exc}). "
+                        "Falling back transparently to CPU int8 mode."
+                    )
+                    self.device = "cpu"
+                    self.compute_type = "int8"
+                    try:
+                        from faster_whisper import WhisperModel
+
+                        self._model = WhisperModel(
+                            self.model_size,
+                            device="cpu",
+                            compute_type="int8",
+                            download_root=self.download_root,
+                        )
+                        return self._model
+                    except Exception as cpu_exc:
+                        raise TranscriptionError(
+                            f"Failed to load FasterWhisper model '{self.model_size}' on CPU fallback: {cpu_exc}"
+                        ) from cpu_exc
+
                 raise TranscriptionError(
                     f"Failed to load FasterWhisper model '{self.model_size}': {exc}"
                 ) from exc
         return self._model
 
     def transcribe(self, audio_or_video_path: Path) -> TimestampedTranscript:
-        """Transcribe an audio or video file using local faster-whisper.
+        """Transcribe an audio or video file using local faster-whisper with GPU/CPU fallback.
 
         Args:
             audio_or_video_path: Path to the local audio or video file.
@@ -146,6 +194,38 @@ class FasterWhisperTranscriptionProvider(TranscriptionProvider):
         except TranscriptionError:
             raise
         except Exception as exc:
+            if self.device == "cuda":
+                logger.warning(
+                    f"FasterWhisper CUDA transcription failed ({exc}). Retrying on CPU..."
+                )
+                try:
+                    self.device = "cpu"
+                    self.compute_type = "int8"
+                    self._model = None
+                    cpu_model = self._get_model()
+                    segments_gen, _ = cpu_model.transcribe(
+                        str(path),
+                        language=self.language,
+                        beam_size=5,
+                    )
+                    segments_list = []
+                    for seg in segments_gen:
+                        text = seg.text.strip() if seg.text else ""
+                        if not text:
+                            continue
+                        segments_list.append(
+                            TranscriptSegment(
+                                start_seconds=float(seg.start),
+                                end_seconds=float(seg.end),
+                                text=text,
+                            )
+                        )
+                    return TimestampedTranscript(segments=segments_list)
+                except Exception as fallback_exc:
+                    raise TranscriptionError(
+                        f"FasterWhisper transcription failed on CPU fallback: {fallback_exc}"
+                    ) from fallback_exc
+
             raise TranscriptionError(f"FasterWhisper transcription failed: {exc}") from exc
 
 

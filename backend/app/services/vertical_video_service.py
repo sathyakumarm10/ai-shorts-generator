@@ -12,6 +12,7 @@ from typing import Optional, Tuple
 from uuid import uuid4
 
 from app.models import FramingType, IngestedVideo, VerticalVideoRequest
+from app.services.acceleration_service import HardwareAccelerationService, default_acceleration_service
 from app.services.smart_framing_service import SmartFramingPlan, SmartFramingService
 
 # Default directory for generated vertical clips, located in the ignored `outputs/vertical` area.
@@ -33,6 +34,7 @@ class VerticalVideoService:
         ffmpeg_executable: str = "ffmpeg",
         smart_framing_service: Optional[SmartFramingService] = None,
         enable_smart_framing: bool = True,
+        acceleration_service: Optional[HardwareAccelerationService] = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.ffmpeg_executable = ffmpeg_executable
@@ -40,6 +42,7 @@ class VerticalVideoService:
             ffmpeg_executable=self.ffmpeg_executable
         )
         self.enable_smart_framing = enable_smart_framing
+        self.acceleration_service = acceleration_service or default_acceleration_service
 
     def convert_to_vertical(
         self,
@@ -128,30 +131,33 @@ class VerticalVideoService:
         crop_x = framing_plan.crop_x_expr
         filter_expr = f"scale={req.width}:{req.height}:force_original_aspect_ratio=increase,crop={req.width}:{req.height}:{crop_x}:(in_h-out_h)/2"
 
-        cmd = [
-            executable,
-            "-y",  # Overwrite output file if exists (unique name prevents collisions)
-            "-i",
-            str(source_path),
-            "-vf",
-            filter_expr,
-            "-c:v",
-            "libx264",
-            "-c:a",
-            "aac",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            str(output_path),
-        ]
+        def build_cmd(use_nvenc: bool) -> list[str]:
+            v_flags = ["-c:v", "h264_nvenc", "-preset", "p4"] if use_nvenc else ["-c:v", "libx264"]
+            return [
+                executable,
+                "-y",  # Overwrite output file if exists
+                "-i",
+                str(source_path),
+                "-vf",
+                filter_expr,
+                *v_flags,
+                "-c:a",
+                "aac",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+
+        def validator() -> bool:
+            return output_path.is_file() and output_path.stat().st_size > 0
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
+            result = self.acceleration_service.run_ffmpeg_with_fallback(
+                command_builder=build_cmd,
+                output_file_validator=validator,
+                ffmpeg_executable=self.ffmpeg_executable,
             )
         except FileNotFoundError as exc:
             raise VerticalVideoError(

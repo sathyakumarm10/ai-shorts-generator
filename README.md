@@ -120,11 +120,33 @@ ffprobe -version
 
 Both commands should display version information without command-not-found errors.
 
-### 3. Running Tests
+### 3. GPU Acceleration & NVIDIA CUDA Support
+
+AI Shorts Generator includes full GPU acceleration for NVIDIA hardware with transparent automatic CPU fallback:
+- **GPU-Accelerated Whisper STT**: Faster speech-to-text transcription powered by CTranslate2 CUDA runtime (`float16` precision).
+- **FFmpeg NVENC Encoding**: Fast H.264 hardware encoding (`h264_nvenc`) for clipping, 9:16 vertical formatting, and subtitle burning.
+- **Transparent CPU Fallback**: Automatically falls back to CPU execution (`int8` Whisper, `libx264` FFmpeg) if CUDA or NVENC are unavailable, out of memory, or encounter driver errors.
+
+#### Configuration (.env)
+```ini
+ACCELERATION_DEVICE=auto       # "auto", "cuda", or "cpu"
+WHISPER_DEVICE=auto            # "auto", "cuda", or "cpu"
+WHISPER_COMPUTE_TYPE=auto      # "auto", "float16", "int8_float16", "int8"
+FFMPEG_ACCELERATION=auto       # "auto", "nvenc", or "cpu"
+```
+
+#### Running with Docker GPU Acceleration
+To run the full stack with NVIDIA GPU passthrough enabled:
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
+
+### 4. Running Tests
 
 Run the complete test suite:
 
 ```powershell
 .\backend\venv\Scripts\python.exe -m pytest tests -q
 ```
+
 

@@ -12,6 +12,12 @@ import shutil
 import sys
 from typing import Optional
 
+from app.services.acceleration_service import (
+    AccelerationReport,
+    HardwareAccelerationService,
+    default_acceleration_service,
+)
+
 
 @dataclass(frozen=True)
 class ToolStatus:
@@ -23,11 +29,12 @@ class ToolStatus:
 
 @dataclass(frozen=True)
 class MediaToolsReport:
-    """Structured report containing status for ffmpeg, ffprobe, and yt-dlp."""
+    """Structured report containing status for ffmpeg, ffprobe, yt-dlp, and hardware acceleration."""
 
     ffmpeg: ToolStatus
     ffprobe: ToolStatus
     yt_dlp: ToolStatus
+    acceleration: Optional[AccelerationReport] = None
 
 
 class MediaToolsService:
@@ -36,6 +43,9 @@ class MediaToolsService:
     FFMPEG_CMD = "ffmpeg"
     FFPROBE_CMD = "ffprobe"
     YT_DLP_CMD = "yt-dlp"
+
+    def __init__(self, acceleration_service: Optional[HardwareAccelerationService] = None) -> None:
+        self.acceleration_service = acceleration_service or default_acceleration_service
 
     def check_tool(self, tool_name: str) -> ToolStatus:
         """Check if an executable is discoverable via system PATH or Python scripts directory.
@@ -59,13 +69,16 @@ class MediaToolsService:
         return ToolStatus(available=False, path=None)
 
     def check_all(self) -> MediaToolsReport:
-        """Check availability for all required media processing tools.
+        """Check availability for all required media processing tools and acceleration status.
 
         Returns:
-            MediaToolsReport: Structured availability for ffmpeg, ffprobe, and yt-dlp.
+            MediaToolsReport: Structured availability for ffmpeg, ffprobe, yt-dlp, and acceleration.
         """
+        ffmpeg_status = self.check_tool(self.FFMPEG_CMD)
+        ffmpeg_bin = ffmpeg_status.path or self.FFMPEG_CMD
         return MediaToolsReport(
-            ffmpeg=self.check_tool(self.FFMPEG_CMD),
+            ffmpeg=ffmpeg_status,
             ffprobe=self.check_tool(self.FFPROBE_CMD),
             yt_dlp=self.check_tool(self.YT_DLP_CMD),
+            acceleration=self.acceleration_service.get_acceleration_report(ffmpeg_executable=ffmpeg_bin),
         )
