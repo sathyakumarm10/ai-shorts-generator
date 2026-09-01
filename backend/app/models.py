@@ -27,6 +27,8 @@ class User(BaseModel):
     user_id: str = Field(..., min_length=1, description="Unique user identifier.")
     email: str = Field(..., min_length=3, description="User's email address.")
     password_hash: str = Field(..., min_length=1, description="PBKDF2-SHA256 password hash.")
+    role: UserRole = Field(default=UserRole.USER, description="User role (user, admin).")
+    is_active: bool = Field(default=True, description="Account active status.")
     created_at: datetime = Field(..., description="UTC creation timestamp.")
     updated_at: datetime = Field(..., description="UTC update timestamp.")
 
@@ -36,6 +38,7 @@ class UserCreate(BaseModel):
 
     email: str = Field(..., min_length=3, max_length=255, description="Valid email address.")
     password: str = Field(..., min_length=6, max_length=128, description="User password (min 6 chars).")
+    role: Optional[UserRole] = Field(default=UserRole.USER, description="User role assignment.")
 
     @model_validator(mode="after")
     def validate_email_format(self) -> "UserCreate":
@@ -64,15 +67,34 @@ class UserResponse(BaseModel):
 
     user_id: str = Field(..., description="User unique identifier.")
     email: str = Field(..., description="User email address.")
+    role: UserRole = Field(default=UserRole.USER, description="User role.")
+    is_active: bool = Field(default=True, description="Account active status.")
     created_at: datetime = Field(..., description="Registration timestamp.")
 
 
+class RefreshTokenRequest(BaseModel):
+    """Request payload for refreshing access tokens."""
+
+    refresh_token: str = Field(..., min_length=1, description="Active refresh token.")
+
+
+class SessionResponse(BaseModel):
+    """Represents an active user authentication session."""
+
+    token_id: str = Field(..., description="Session/token identifier.")
+    created_at: datetime = Field(..., description="Session creation timestamp.")
+    expires_at: datetime = Field(..., description="Session expiration timestamp.")
+    user_agent: Optional[str] = Field(default=None, description="Client user agent string.")
+
+
 class TokenResponse(BaseModel):
-    """JWT authentication token response."""
+    """JWT authentication token response with optional refresh token."""
 
     access_token: str = Field(..., description="JWT Bearer access token.")
     token_type: str = Field(default="bearer", description="Token type.")
-    expires_in: int = Field(..., description="Seconds until expiration.")
+    expires_in: int = Field(..., description="Seconds until access token expiration.")
+    refresh_token: Optional[str] = Field(default=None, description="Cryptographically secure refresh token.")
+    refresh_expires_in: Optional[int] = Field(default=None, description="Seconds until refresh token expiration.")
     user: UserResponse = Field(..., description="Authenticated user info.")
 
 

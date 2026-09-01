@@ -154,6 +154,9 @@ class UserStoreBase(Protocol):
     def get_by_email(self, email: str) -> Optional[Any]:
         ...
 
+    def list_all(self) -> List[Any]:
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Global Config Instance
@@ -317,3 +320,70 @@ def create_user_store(
 
     return SQLiteUserStore(db_path=cfg.sqlite_user_db_path)
 
+
+@runtime_checkable
+class TokenStoreBase(Protocol):
+    """Protocol defining the interface for Token persistence stores (refresh + JTI revocation)."""
+
+    def store_refresh_token(
+        self,
+        token_id: str,
+        user_id: str,
+        token_hash: str,
+        expires_at: Any,
+        session_id: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> None:
+        ...
+
+    def get_refresh_token(self, token_id: str) -> Optional[Any]:
+        ...
+
+    def revoke_refresh_token(self, token_id: str) -> None:
+        ...
+
+    def revoke_all_user_tokens(self, user_id: str) -> None:
+        ...
+
+    def list_active_sessions(self, user_id: str) -> List[Any]:
+        ...
+
+    def revoke_access_token(self, jti: str, expires_at: Any) -> None:
+        ...
+
+    def is_access_token_revoked(self, jti: str) -> bool:
+        ...
+
+    def cleanup_expired_tokens(self) -> int:
+        ...
+
+
+def create_token_store(
+    config: Optional[DatabaseConfig] = None,
+    db_path: Optional[str] = None,
+) -> TokenStoreBase:
+    """Create a configured TokenStore instance with automatic local fallback if PostgreSQL fails."""
+    from app.services.token_store_sqlite import SQLiteTokenStore
+
+    if db_path is not None:
+        if db_path.startswith("postgres://") or db_path.startswith("postgresql://"):
+            from app.services.token_store_postgres import PostgresTokenStore
+            return PostgresTokenStore(database_url=db_path)
+        return SQLiteTokenStore(db_path=db_path)
+
+    cfg = config or DatabaseConfig.from_env()
+    if cfg.backend == DatabaseBackend.POSTGRESQL and cfg.database_url:
+        try:
+            from app.services.token_store_postgres import PostgresTokenStore
+            return PostgresTokenStore(database_url=cfg.database_url)
+        except Exception as exc:
+            if cfg.enable_local_fallback:
+                logger.warning(
+                    "Failed to connect to PostgreSQL token store (%s). Falling back to SQLite (%s)",
+                    exc,
+                    cfg.sqlite_user_db_path,
+                )
+                return SQLiteTokenStore(db_path=cfg.sqlite_user_db_path)
+            raise
+
+    return SQLiteTokenStore(db_path=cfg.sqlite_user_db_path)

@@ -8,16 +8,17 @@ from pathlib import Path
 import sqlite3
 from typing import Optional
 
-from app.models import User
+from app.models import User, UserRole
 from app.services.db_migrations import run_sqlite_migrations
 
 _INSERT_USER_SQL = """\
-INSERT INTO users (user_id, email, password_hash, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO users (user_id, email, password_hash, role, is_active, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
 """
 
 _SELECT_BY_ID_SQL = "SELECT * FROM users WHERE user_id = ?;"
 _SELECT_BY_EMAIL_SQL = "SELECT * FROM users WHERE lower(email) = lower(?);"
+_SELECT_ALL_SQL = "SELECT * FROM users ORDER BY created_at ASC;"
 
 
 def _str_to_dt(s: Optional[str]) -> Optional[datetime]:
@@ -34,10 +35,18 @@ def _dt_to_str(dt: Optional[datetime]) -> Optional[str]:
 
 
 def _row_to_user(row: sqlite3.Row) -> User:
+    raw_role = row["role"] if "role" in row.keys() and row["role"] else "user"
+    try:
+        role_val = UserRole(raw_role)
+    except ValueError:
+        role_val = UserRole.USER
+    is_active_val = bool(row["is_active"]) if "is_active" in row.keys() and row["is_active"] is not None else True
     return User(
         user_id=row["user_id"],
         email=row["email"],
         password_hash=row["password_hash"],
+        role=role_val,
+        is_active=is_active_val,
         created_at=_str_to_dt(row["created_at"]) or datetime.now(timezone.utc),
         updated_at=_str_to_dt(row["updated_at"]) or datetime.now(timezone.utc),
     )
@@ -77,15 +86,33 @@ class SQLiteUserStore:
 
     def create(self, user: User) -> User:
         """Insert a new user record. Raises sqlite3.IntegrityError if email or ID exists."""
+        role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
         params = (
             user.user_id,
             user.email.strip().lower(),
             user.password_hash,
+            role_str,
+            1 if user.is_active else 0,
             _dt_to_str(user.created_at),
             _dt_to_str(user.updated_at),
         )
         with self._connect() as conn:
-            conn.execute(_INSERT_USER_SQL, params)
+            try:
+                conn.execute(_INSERT_USER_SQL, params)
+            except sqlite3.OperationalError:
+                # Fallback if older schema before migration 3 columns were added
+                fallback_sql = """
+                INSERT INTO users (user_id, email, password_hash, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?);
+                """
+                fallback_params = (
+                    user.user_id,
+                    user.email.strip().lower(),
+                    user.password_hash,
+                    _dt_to_str(user.created_at),
+                    _dt_to_str(user.updated_at),
+                )
+                conn.execute(fallback_sql, fallback_params)
         return user
 
     def get_by_id(self, user_id: str) -> Optional[User]:
@@ -102,3 +129,10 @@ class SQLiteUserStore:
             cursor = conn.execute(_SELECT_BY_EMAIL_SQL, (clean_email,))
             row = cursor.fetchone()
         return _row_to_user(row) if row else None
+
+    def list_all(self) -> list[User]:
+        """List all users in the store."""
+        with self._connect() as conn:
+            cursor = conn.execute(_SELECT_ALL_SQL)
+            rows = cursor.fetchall()
+        return [_row_to_user(row) for row in rows]

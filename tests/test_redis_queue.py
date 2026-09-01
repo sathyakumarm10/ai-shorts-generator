@@ -149,7 +149,7 @@ class TestThreadPoolJobQueue:
 # ---------------------------------------------------------------------------
 
 
-def _make_redis_queue(mock_client: Any) -> "object":
+def _make_redis_queue(mock_client: Any) -> Any:
     """Create a RedisJobQueue with a mocked Redis client bypassing ping."""
     from app.services.queue_service import RedisJobQueue
 

@@ -12,20 +12,24 @@ import tempfile
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Security, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Security, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import ValidationError
 
 from app.models import (
     JobRecord,
+    RefreshTokenRequest,
+    SessionResponse,
     ShortsGenerationRequest,
     TokenResponse,
     User,
     UserCreate,
     UserLogin,
     UserResponse,
+    UserRole,
     VideoJobRequest,
 )
 from app.services.acceleration_service import default_acceleration_service
@@ -33,6 +37,9 @@ from app.services.auth_service import (
     default_auth_service,
     get_current_user,
     get_optional_user,
+    require_admin,
+    require_role,
+    security_bearer,
 )
 from app.services.db import get_database_report
 from app.services.job_runner_service import default_job_runner
@@ -44,17 +51,19 @@ from app.services.storage_service import default_storage_service, get_storage_re
 # Create the FastAPI application instance.
 app = FastAPI(title="AI Shorts Generator API")
 
-# Enable CORS for frontend clients with configurable origins support
+# Enable CORS for frontend clients with secure credentials and origins configuration
 raw_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").strip()
 if raw_allowed_origins == "*" or not raw_allowed_origins:
     allowed_origins = ["*"]
+    allow_credentials = False
 else:
     allowed_origins = [orig.strip() for orig in raw_allowed_origins.split(",") if orig.strip()]
+    allow_credentials = True
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -165,15 +174,17 @@ def get_queue_status() -> Dict[str, Any]:
 
 
 @app.post("/api/auth/register", response_model=TokenResponse)
-def register(payload: UserCreate) -> TokenResponse:
+def register(payload: UserCreate, request: Request) -> TokenResponse:
     """Register a new user account with unique email and secure hashed password."""
-    return default_auth_service.register_user(payload)
+    user_agent = request.headers.get("user-agent")
+    return default_auth_service.register_user(payload, user_agent=user_agent)
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-def login(payload: UserLogin) -> TokenResponse:
-    """Authenticate with email and password and return a JWT access token."""
-    return default_auth_service.authenticate_user(payload)
+def login(payload: UserLogin, request: Request) -> TokenResponse:
+    """Authenticate with email and password and return a JWT access and refresh token pair."""
+    user_agent = request.headers.get("user-agent")
+    return default_auth_service.authenticate_user(payload, user_agent=user_agent)
 
 
 @app.get("/api/auth/me", response_model=UserResponse)
@@ -182,35 +193,76 @@ def get_current_user_profile(current_user: User = Depends(get_current_user)) -> 
     return UserResponse(
         user_id=current_user.user_id,
         email=current_user.email,
+        role=current_user.role,
+        is_active=current_user.is_active,
         created_at=current_user.created_at,
     )
 
 
 @app.post("/api/auth/refresh", response_model=TokenResponse)
-def refresh_token(current_user: User = Depends(get_current_user)) -> TokenResponse:
-    """Refresh the access token for the active authenticated user."""
-    from app.services.auth_service import ACCESS_TOKEN_EXPIRE_MINUTES, create_jwt_token
-    expires_seconds = ACCESS_TOKEN_EXPIRE_MINUTES * 60
-    token = create_jwt_token(
-        payload={"sub": current_user.user_id, "email": current_user.email},
-        expires_in_seconds=expires_seconds,
-    )
-    return TokenResponse(
-        access_token=token,
-        token_type="bearer",
-        expires_in=expires_seconds,
-        user=UserResponse(
-            user_id=current_user.user_id,
-            email=current_user.email,
-            created_at=current_user.created_at,
-        ),
+def refresh_token(
+    request: Request,
+    payload: Optional[RefreshTokenRequest] = None,
+    current_user: Optional[User] = Depends(get_optional_user),
+) -> TokenResponse:
+    """Refresh tokens: rotates refresh token or falls back to legacy Bearer refresh for backward compatibility."""
+    user_agent = request.headers.get("user-agent")
+    if payload and payload.refresh_token:
+        return default_auth_service.refresh_tokens(payload.refresh_token, user_agent=user_agent)
+
+    # Backward compatibility fallback for legacy clients calling /api/auth/refresh with Bearer token
+    if current_user is not None:
+        return default_auth_service._issue_tokens_for_user(current_user, user_agent=user_agent)
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Refresh token payload or Bearer authentication is required.",
     )
 
 
 @app.post("/api/auth/logout")
-def logout(current_user: User = Depends(get_current_user)) -> Dict[str, Any]:
-    """Logout endpoint."""
+def logout(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security_bearer),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Logout endpoint: revokes access token JTI and invalidates user sessions."""
+    raw_token = credentials.credentials if credentials else None
+    default_auth_service.logout_user(raw_token, current_user)
     return {"message": "Logged out successfully."}
+
+
+@app.get("/api/auth/sessions", response_model=List[SessionResponse])
+def list_sessions(current_user: User = Depends(get_current_user)) -> List[SessionResponse]:
+    """List all active authentication sessions for the authenticated user."""
+    return default_auth_service.list_user_sessions(current_user.user_id)
+
+
+@app.delete("/api/auth/sessions/{token_id}")
+def revoke_session(
+    token_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Revoke a specific user session."""
+    success = default_auth_service.revoke_session(current_user.user_id, token_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found or already revoked.")
+    return {"message": "Session revoked successfully."}
+
+
+@app.get("/api/admin/users", response_model=List[UserResponse])
+def admin_list_users(admin_user: User = Depends(require_admin)) -> List[UserResponse]:
+    """Admin-only endpoint: list all registered users (RBAC enforced)."""
+    users = default_auth_service.user_store.list_all()
+    return [
+        UserResponse(
+            user_id=u.user_id,
+            email=u.email,
+            role=u.role,
+            is_active=u.is_active,
+            created_at=u.created_at,
+        )
+        for u in users
+    ]
 
 
 # ---------------------------------------------------------------------------

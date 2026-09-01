@@ -111,6 +111,81 @@ MIGRATIONS: List[Tuple[int, str, List[str], List[str]]] = [
             """,
         ],
     ),
+    (
+        3,
+        "add_auth_sessions_and_revoked_tokens",
+        [
+            # SQLite: refresh_tokens table
+            """
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                token_id     TEXT PRIMARY KEY,
+                user_id      TEXT NOT NULL,
+                token_hash   TEXT NOT NULL,
+                expires_at   TEXT NOT NULL,
+                revoked      INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL,
+                session_id   TEXT,
+                user_agent   TEXT
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
+            """,
+            # SQLite: revoked_tokens table (access token JTI blocklist)
+            """
+            CREATE TABLE IF NOT EXISTS revoked_tokens (
+                jti        TEXT PRIMARY KEY,
+                revoked_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at);
+            """,
+        ],
+        [
+            # PostgreSQL: user columns
+            """
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
+            """,
+            """
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+            """,
+            # PostgreSQL: refresh_tokens table
+            """
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                token_id     TEXT PRIMARY KEY,
+                user_id      TEXT NOT NULL,
+                token_hash   TEXT NOT NULL,
+                expires_at   TIMESTAMPTZ NOT NULL,
+                revoked      BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at   TIMESTAMPTZ NOT NULL,
+                session_id   TEXT,
+                user_agent   TEXT
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
+            """,
+            # PostgreSQL: revoked_tokens table (access token JTI blocklist)
+            """
+            CREATE TABLE IF NOT EXISTS revoked_tokens (
+                jti        TEXT PRIMARY KEY,
+                revoked_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at);
+            """,
+        ],
+    ),
 ]
 
 
@@ -152,6 +227,9 @@ def run_sqlite_migrations(conn: Any) -> int:
                 _ensure_sqlite_column(conn, "jobs", "retry_count", "INTEGER NOT NULL DEFAULT 0")
                 _ensure_sqlite_column(conn, "jobs", "queue_name", "TEXT")
                 _ensure_sqlite_column(conn, "jobs", "user_id", "TEXT")
+            elif version == 3:
+                _ensure_sqlite_column(conn, "users", "role", "TEXT NOT NULL DEFAULT 'user'")
+                _ensure_sqlite_column(conn, "users", "is_active", "INTEGER NOT NULL DEFAULT 1")
 
             now_iso = datetime.now(timezone.utc).isoformat()
             cursor.execute(

@@ -1,9 +1,11 @@
 /**
- * Centralized API Client for AI Shorts Generator with JWT Authentication
+ * Centralized API Client for AI Shorts Generator with JWT Authentication,
+ * Token Rotation, Refresh Token Persistence, and Automatic 401 Re-Authentication.
  */
 
 const API_BASE = '' // Relative path works with Vite proxy or production serving
 const TOKEN_KEY = 'ai_shorts_auth_token'
+const REFRESH_TOKEN_KEY = 'ai_shorts_refresh_token'
 
 export function getAuthToken() {
   try {
@@ -25,6 +27,31 @@ export function setAuthToken(token) {
   }
 }
 
+export function getRefreshToken() {
+  try {
+    return localStorage.getItem(REFRESH_TOKEN_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function setRefreshToken(token) {
+  try {
+    if (token) {
+      localStorage.setItem(REFRESH_TOKEN_KEY, token)
+    } else {
+      localStorage.removeItem(REFRESH_TOKEN_KEY)
+    }
+  } catch {
+    // Storage quota or privacy mode
+  }
+}
+
+export function clearAuthTokens() {
+  setAuthToken(null)
+  setRefreshToken(null)
+}
+
 function getAuthHeaders(extraHeaders = {}) {
   const token = getAuthToken()
   const headers = { ...extraHeaders }
@@ -32,6 +59,70 @@ function getAuthHeaders(extraHeaders = {}) {
     headers['Authorization'] = `Bearer ${token}`
   }
   return headers
+}
+
+let refreshPromise = null
+
+export async function refreshTokens() {
+  const currentRefreshToken = getRefreshToken()
+  if (!currentRefreshToken) {
+    clearAuthTokens()
+    return null
+  }
+
+  // Prevent multiple simultaneous refresh calls (refresh stampede)
+  if (refreshPromise) {
+    return refreshPromise
+  }
+
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: currentRefreshToken }),
+      })
+
+      if (!response.ok) {
+        clearAuthTokens()
+        return null
+      }
+
+      const data = await response.json()
+      if (data.access_token) {
+        setAuthToken(data.access_token)
+      }
+      if (data.refresh_token) {
+        setRefreshToken(data.refresh_token)
+      }
+      return data
+    } catch {
+      clearAuthTokens()
+      return null
+    } finally {
+      refreshPromise = null
+    }
+  })()
+
+  return refreshPromise
+}
+
+/**
+ * Authenticated Fetch wrapper with automatic token refresh on 401 Unauthorized responses.
+ */
+export async function authFetch(url, options = {}) {
+  const headers = getAuthHeaders(options.headers || {})
+  let response = await fetch(url, { ...options, headers })
+
+  if (response.status === 401 && getRefreshToken()) {
+    const refreshed = await refreshTokens()
+    if (refreshed && refreshed.access_token) {
+      const retryHeaders = getAuthHeaders(options.headers || {})
+      response = await fetch(url, { ...options, headers: retryHeaders })
+    }
+  }
+
+  return response
 }
 
 export async function register(email, password) {
@@ -47,6 +138,9 @@ export async function register(email, password) {
   const data = await response.json()
   if (data.access_token) {
     setAuthToken(data.access_token)
+  }
+  if (data.refresh_token) {
+    setRefreshToken(data.refresh_token)
   }
   return data
 }
@@ -65,17 +159,20 @@ export async function login(email, password) {
   if (data.access_token) {
     setAuthToken(data.access_token)
   }
+  if (data.refresh_token) {
+    setRefreshToken(data.refresh_token)
+  }
   return data
 }
 
 export async function getCurrentUser() {
   const token = getAuthToken()
-  if (!token) return null
-  const response = await fetch(`${API_BASE}/api/auth/me`, {
-    headers: getAuthHeaders(),
-  })
+  const refreshToken = getRefreshToken()
+  if (!token && !refreshToken) return null
+
+  const response = await authFetch(`${API_BASE}/api/auth/me`)
   if (!response.ok) {
-    setAuthToken(null)
+    clearAuthTokens()
     return null
   }
   return response.json()
@@ -83,23 +180,39 @@ export async function getCurrentUser() {
 
 export async function logout() {
   try {
-    await fetch(`${API_BASE}/api/auth/logout`, {
+    await authFetch(`${API_BASE}/api/auth/logout`, {
       method: 'POST',
-      headers: getAuthHeaders(),
     })
   } catch {
     // Ignore network errors on logout
   }
-  setAuthToken(null)
+  clearAuthTokens()
+}
+
+export async function listSessions() {
+  const response = await authFetch(`${API_BASE}/api/auth/sessions`)
+  if (!response.ok) {
+    return []
+  }
+  return response.json()
+}
+
+export async function revokeSession(tokenId) {
+  const response = await authFetch(`${API_BASE}/api/auth/sessions/${encodeURIComponent(tokenId)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    throw new Error('Failed to revoke session')
+  }
+  return response.json()
 }
 
 export async function uploadVideo(file) {
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch(`${API_BASE}/api/upload`, {
+  const response = await authFetch(`${API_BASE}/api/upload`, {
     method: 'POST',
-    headers: getAuthHeaders(),
     body: formData,
   })
 
@@ -118,11 +231,11 @@ export async function uploadVideo(file) {
 }
 
 export async function createJob(requestPayload) {
-  const response = await fetch(`${API_BASE}/api/jobs`, {
+  const response = await authFetch(`${API_BASE}/api/jobs`, {
     method: 'POST',
-    headers: getAuthHeaders({
+    headers: {
       'Content-Type': 'application/json',
-    }),
+    },
     body: JSON.stringify(requestPayload),
   })
 
@@ -145,15 +258,10 @@ export async function createJob(requestPayload) {
 }
 
 export async function getJob(jobId) {
-  const headers = getAuthHeaders()
-  const init = Object.keys(headers).length > 0 ? { headers } : null
   const url = `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`
-  const response = init ? await fetch(url, init) : await fetch(url)
+  const response = await authFetch(url)
 
   if (!response.ok) {
-    if (response.status === 401) {
-      setAuthToken(null)
-    }
     let errorDetail = 'Failed to fetch job status'
     try {
       const errJson = await response.json()
@@ -168,14 +276,9 @@ export async function getJob(jobId) {
 }
 
 export async function listJobs() {
-  const headers = getAuthHeaders()
-  const init = Object.keys(headers).length > 0 ? { headers } : null
   const url = `${API_BASE}/api/jobs`
-  const response = init ? await fetch(url, init) : await fetch(url)
+  const response = await authFetch(url)
   if (!response.ok) {
-    if (response.status === 401) {
-      setAuthToken(null)
-    }
     return []
   }
   return response.json()
