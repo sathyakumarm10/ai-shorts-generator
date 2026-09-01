@@ -1,4 +1,4 @@
-"""Unit tests for KaraokeCaptionService ASS subtitle script generation and \k timing tags."""
+r"""Unit tests for KaraokeCaptionService ASS subtitle script generation and \k timing tags."""
 
 from pathlib import Path
 import pytest

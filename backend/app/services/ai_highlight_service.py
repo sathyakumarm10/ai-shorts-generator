@@ -246,7 +246,8 @@ class AIHighlightService:
                 clip_text = item.get("description") or item.get("title") or "AI Highlight Segment"
 
             # Parse or synthesize score
-            raw_score = item.get("score") if isinstance(item.get("score"), dict) else {}
+            raw_score_val = item.get("score")
+            raw_score: dict = raw_score_val if isinstance(raw_score_val, dict) else {}
             score = HighlightScore(
                 overall=float(min(1.0, max(0.0, raw_score.get("overall", 0.90)))),
                 hook=float(min(1.0, max(0.0, raw_score.get("hook", 0.85)))),

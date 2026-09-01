@@ -54,7 +54,7 @@ def sample_transcript() -> TimestampedTranscript:
         TranscriptSegment(start_seconds=45.0, end_seconds=65.0, text="That is how top performers achieve 10x better results."),
         TranscriptSegment(start_seconds=65.0, end_seconds=80.0, text="Thank you for watching and see you next time."),
     ]
-    return TimestampedTranscript(segments=segments, full_text=" ".join(s.text for s in segments))
+    return TimestampedTranscript(segments=segments)
 
 
 def test_ai_candidate_valid_extraction(sample_transcript):

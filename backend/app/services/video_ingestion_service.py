@@ -6,6 +6,7 @@ locally as `IngestedVideo` objects containing validated local file paths.
 """
 
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4
 
 import yt_dlp
@@ -55,7 +56,7 @@ class VideoIngestionService:
         }
 
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
                 info = ydl.extract_info(location, download=True)
                 downloaded_file = Path(ydl.prepare_filename(info))
         except Exception as exc:

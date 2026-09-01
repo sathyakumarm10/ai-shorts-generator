@@ -192,7 +192,7 @@ class TestHighlightClipServiceUnit:
         with pytest.raises(HighlightClipError):
             service.generate_clips(source_video, [cand], max_clips=-5)
         with pytest.raises(HighlightClipError):
-            service.generate_clips(source_video, [cand], max_clips=float("nan"))
+            service.generate_clips(source_video, [cand], max_clips=float("nan"))  # type: ignore
         with pytest.raises(HighlightClipError):
             service.generate_clips(source_video, [cand], max_clips=True)  # type: ignore
 

@@ -308,6 +308,7 @@ def test_job_service_create_and_get_job():
 
     assert created.status == JobStatus.QUEUED
     assert uuid.UUID(created.job_id, version=4)
+    assert created.source is not None
     assert created.source.type == VideoSourceType.YOUTUBE
     assert created.source.location == "https://www.youtube.com/watch?v=example"
     assert created.job_id in job_service.jobs

@@ -29,7 +29,7 @@ class DeterministicMockTranscriptionProvider(TranscriptionProvider):
     def __init__(self, transcript: TimestampedTranscript) -> None:
         self._transcript = transcript
 
-    def transcribe(self, audio_file_path: Path) -> TimestampedTranscript:
+    def transcribe(self, audio_or_video_path: Path) -> TimestampedTranscript:
         return self._transcript
 
 
@@ -90,7 +90,7 @@ class TestShortsGenerationRealIntegration:
 
         # 3. Instantiate real pipeline services (using deterministic mock transcription provider)
         ingestion_service = VideoIngestionService(download_dir=tmp_path / "ingested")
-        ingestion_service.ingest = lambda src: IngestedVideo(file_path=str(source_video_path))
+        ingestion_service.ingest = lambda source: IngestedVideo(file_path=str(source_video_path))
         metadata_service = VideoMetadataService(ffprobe_executable=ffprobe_bin)
         transcription_service = TranscriptionService(
             provider=DeterministicMockTranscriptionProvider(transcript),

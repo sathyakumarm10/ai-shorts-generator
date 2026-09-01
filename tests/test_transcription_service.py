@@ -320,7 +320,7 @@ class TestFasterWhisperTranscriptionProviderUnit:
                 ]
                 return (s for s in segments), {}
 
-        provider._model = MockModel()
+        setattr(provider, "_model", MockModel())
         transcript = provider.transcribe(dummy_audio)
 
         assert isinstance(transcript, TimestampedTranscript)
@@ -344,7 +344,7 @@ class TestFasterWhisperTranscriptionProviderUnit:
             def transcribe(self, path, language=None, beam_size=5):
                 return (s for s in []), {}
 
-        provider._model = MockModel()
+        setattr(provider, "_model", MockModel())
         transcript = provider.transcribe(dummy_audio)
 
         assert isinstance(transcript, TimestampedTranscript)
@@ -364,7 +364,7 @@ class TestFasterWhisperTranscriptionProviderUnit:
                 segments = [MockWhisperSegment(start=5.0, end=3.0, text="Inverted timestamps")]
                 return (s for s in segments), {}
 
-        provider._model = MockModel()
+        setattr(provider, "_model", MockModel())
         with pytest.raises(TranscriptionError) as exc_info:
             provider.transcribe(dummy_audio)
         assert "invalid segment timestamps" in str(exc_info.value).lower()
@@ -386,7 +386,7 @@ class TestFasterWhisperTranscriptionProviderUnit:
                 ]
                 return (s for s in segments), {}
 
-        provider._model = MockModel()
+        setattr(provider, "_model", MockModel())
         with pytest.raises(TranscriptionError) as exc_info:
             provider.transcribe(dummy_audio)
         assert "invalid or overlapping" in str(exc_info.value).lower()
@@ -411,7 +411,7 @@ class TestFasterWhisperTranscriptionProviderUnit:
             def transcribe(self, path, language=None, beam_size=5):
                 raise RuntimeError("CTranslate2 inference engine failed")
 
-        provider._model = FailingModel()
+        setattr(provider, "_model", FailingModel())
         with pytest.raises(TranscriptionError) as exc_info:
             provider.transcribe(dummy_audio)
         assert "FasterWhisper transcription failed" in str(exc_info.value)
