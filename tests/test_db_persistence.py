@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 import pytest
 
+from app.models import JobRecord, JobStatus, User
+from app.services.job_sqlite import SQLiteJobStore
+from app.services.user_sqlite import SQLiteUserStore
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -23,9 +27,7 @@ def _make_job(
     job_id: str = "job-1",
     user_id: str = "user-1",
     status: str = "queued",
-) -> "object":
-    from app.models import JobRecord, JobStatus
-
+) -> JobRecord:
     return JobRecord(
         job_id=job_id,
         user_id=user_id,
@@ -44,9 +46,7 @@ def _make_job(
 def _make_user(
     user_id: str = "user-1",
     email: str = "user@example.com",
-) -> "object":
-    from app.models import User
-
+) -> User:
     now = datetime.now(timezone.utc)
     return User(
         user_id=user_id,
@@ -137,9 +137,7 @@ class TestSQLiteMigrations:
 class TestSQLiteJobStore:
     """Verify SQLiteJobStore CRUD operations and SQLite-specific behaviour."""
 
-    def _store(self, db_path: str = ":memory:") -> "object":
-        from app.services.job_sqlite import SQLiteJobStore
-
+    def _store(self, db_path: str = ":memory:") -> SQLiteJobStore:
         return SQLiteJobStore(db_path=db_path)
 
     def test_insert_and_get(self) -> None:
@@ -171,8 +169,6 @@ class TestSQLiteJobStore:
         assert len(all_jobs) == 2
 
     def test_update(self) -> None:
-        from app.models import JobStatus
-
         store = self._store()
         job = _make_job("j-upd")
         store.insert(job)
@@ -201,8 +197,6 @@ class TestSQLiteJobStore:
         assert store.get("j-new") is not None
 
     def test_upsert_updates_existing(self) -> None:
-        from app.models import JobStatus
-
         store = self._store()
         job = _make_job("j-upsert")
         store.insert(job)
@@ -219,9 +213,7 @@ class TestSQLiteJobStore:
 
 
 class TestSQLiteUserStore:
-    def _store(self, db_path: str = ":memory:") -> "object":
-        from app.services.user_sqlite import SQLiteUserStore
-
+    def _store(self, db_path: str = ":memory:") -> SQLiteUserStore:
         return SQLiteUserStore(db_path=db_path)
 
     def test_create_and_get_by_id(self) -> None:
