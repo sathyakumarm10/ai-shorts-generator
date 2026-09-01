@@ -3,4 +3,5 @@ uvicorn[standard]
 python-multipart
 yt-dlp
 faster-whisper
-
+psycopg[binary]>=3.1.0
+redis>=5.0.0

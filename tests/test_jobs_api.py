@@ -57,7 +57,7 @@ def test_read_root_still_works():
 def test_health_check_still_works():
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json()["status"] == "ok"
 
 
 # ---------------------------------------------------------------------

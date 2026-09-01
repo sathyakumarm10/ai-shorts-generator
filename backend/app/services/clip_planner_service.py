@@ -6,7 +6,7 @@ even distribution across the video timeline.
 """
 
 import math
-from typing import List
+from typing import List, Union
 
 from app.models import PlannedClip, VideoMetadata
 
@@ -23,8 +23,8 @@ class ClipPlannerService:
     def plan_clips(
         self,
         metadata: VideoMetadata,
-        clip_duration_seconds: float,
-        number_of_clips: int,
+        clip_duration_seconds: Union[int, float],
+        number_of_clips: Union[int, float],
     ) -> List[PlannedClip]:
         """Plan candidate non-overlapping clip segments evenly distributed across the video.
 
@@ -106,7 +106,7 @@ class ClipPlannerService:
         if num_clips == 1:
             # Single clip: placed at the start of the video (0s)
             start = 0.0
-            end = float(round(start + clip_duration, 6))
+            end = round(start + clip_duration, 6)
             clips.append(
                 PlannedClip(
                     index=1,
@@ -119,8 +119,8 @@ class ClipPlannerService:
             # Multiple clips: distribute starts across [0, video_duration - clip_duration]
             step = (video_duration - clip_duration) / (num_clips - 1)
             for i in range(num_clips):
-                start = float(round(i * step, 6))
-                end = float(round(start + clip_duration, 6))
+                start = round(i * step, 6)
+                end = round(start + clip_duration, 6)
 
                 # Ensure clip does not extend beyond source duration
                 if end > video_duration + 1e-6:

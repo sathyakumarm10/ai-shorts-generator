@@ -100,7 +100,7 @@ class TestProductionWorkflowE2E:
         """Verify the health endpoint returns 200 OK."""
         resp = client.get("/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        assert resp.json()["status"] == "ok"
 
     def test_full_production_job_lifecycle(self, client: TestClient, sample_video: Path):
         """Perform a complete end-to-end job workflow with auth, upload, generation, and media streaming."""

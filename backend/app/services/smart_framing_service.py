@@ -206,7 +206,7 @@ class SmartFramingService:
 
         return SmartFramingPlan(
             framing_type=FramingType.SMART_FRAMING,
-            crop_x_expr=f"{int(round(clamped_pixel_x))}",
-            target_crop_x_normalized=float(round(clamped_normalized, 3)),
+            crop_x_expr=f"{round(clamped_pixel_x)}",
+            target_crop_x_normalized=round(clamped_normalized, 3),
             confidence=0.88,
         )

@@ -23,6 +23,7 @@ from app.models import (
     VideoJobRequest,
     VideoSource,
 )
+from app.services.db import DatabaseConfig, JobStoreBase, create_job_store
 from app.services.job_sqlite import SQLiteJobStore
 
 
@@ -126,14 +127,27 @@ class JobService:
     Parameters
     ----------
     db_path : str or None
-        Path to the SQLite database file.  ``None`` (the default) creates an
-        ephemeral in-memory database — ideal for unit tests.  Pass a file path
-        for production persistence.
+        Path to the database file or PostgreSQL URL. If None and no store is
+        provided, creates an ephemeral in-memory database for unit tests.
+    store : JobStoreBase or None
+        Explicit pre-built persistence store.
+    config : DatabaseConfig or None
+        Database configuration overrides.
     """
 
-    def __init__(self, db_path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        store: Optional[JobStoreBase] = None,
+        config: Optional[DatabaseConfig] = None,
+    ) -> None:
         self._lock = threading.Lock()
-        self._store = SQLiteJobStore(db_path=db_path or ":memory:")
+        if store is not None:
+            self._store = store
+        elif db_path is not None:
+            self._store = create_job_store(config=config, db_path=db_path)
+        else:
+            self._store = create_job_store(db_path=":memory:")
 
     def create_job(
         self,
@@ -315,15 +329,7 @@ class JobService:
 # Global default instance
 # ---------------------------------------------------------------------------
 
-# Resolve the default persistent database path.
-# Override with the JOB_DB_PATH environment variable if desired.
-_DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_DEFAULT_DB_PATH = os.environ.get(
-    "JOB_DB_PATH",
-    str(_DEFAULT_DB_DIR / "jobs.sqlite3"),
-)
-
-default_job_service = JobService(db_path=_DEFAULT_DB_PATH)
+default_job_service = JobService(store=create_job_store())
 
 
 # ---------------------------------------------------------------------------

@@ -34,9 +34,11 @@ from app.services.auth_service import (
     get_current_user,
     get_optional_user,
 )
+from app.services.db import get_database_report
 from app.services.job_runner_service import default_job_runner
 from app.services.job_service import default_job_service
 from app.services.media_storage_service import default_media_storage
+from app.services.queue_service import default_job_queue, get_queue_report
 from app.services.storage_service import default_storage_service, get_storage_report
 
 # Create the FastAPI application instance.
@@ -69,9 +71,23 @@ def read_root():
 
 
 @app.get("/health")
-def health_check():
-    """Simple health check endpoint used to verify the service is alive."""
-    return {"status": "ok"}
+def health_check() -> Dict[str, Any]:
+    """Health check endpoint used to verify service and subsystem readiness."""
+    db_rep = get_database_report()
+    q_rep = get_queue_report(default_job_queue)
+    return {
+        "status": "ok",
+        "database": {
+            "backend": db_rep.backend,
+            "connected": db_rep.connected,
+            "migration_version": db_rep.migration_version,
+        },
+        "queue": {
+            "backend": q_rep.backend,
+            "connected": q_rep.connected,
+            "pending_count": q_rep.pending_count,
+        },
+    }
 
 
 @app.get("/api/system/acceleration")
@@ -103,6 +119,43 @@ def get_storage_status() -> Dict[str, Any]:
         "public_base_url": report.public_base_url,
         "is_cloud_active": report.is_cloud_active,
         "local_fallback_enabled": report.local_fallback_enabled,
+    }
+
+
+@app.get("/api/system/database")
+def get_database_status() -> Dict[str, Any]:
+    """Retrieve runtime database diagnostics and connection metrics."""
+    report = get_database_report()
+    return {
+        "backend": report.backend,
+        "configured_backend": report.configured_backend,
+        "connected": report.connected,
+        "database_name": report.database_name,
+        "host": report.host,
+        "port": report.port,
+        "migration_version": report.migration_version,
+        "latency_ms": report.latency_ms,
+        "local_fallback_active": report.local_fallback_active,
+        "error": report.error,
+    }
+
+
+@app.get("/api/system/queue")
+def get_queue_status() -> Dict[str, Any]:
+    """Retrieve runtime distributed queue diagnostics and worker health."""
+    report = get_queue_report(default_job_queue)
+    return {
+        "backend": report.backend,
+        "configured_backend": report.configured_backend,
+        "connected": report.connected,
+        "pending_count": report.pending_count,
+        "processing_count": report.processing_count,
+        "delayed_count": report.delayed_count,
+        "dead_letter_count": report.dead_letter_count,
+        "active_workers_count": report.active_workers_count,
+        "local_fallback_active": report.local_fallback_active,
+        "latency_ms": report.latency_ms,
+        "error": report.error,
     }
 
 

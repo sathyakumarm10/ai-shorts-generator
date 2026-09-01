@@ -3,15 +3,13 @@
 Provides a lightweight thread-safe store that persists JobRecord instances
 to a local SQLite database, enabling jobs to survive backend restarts.
 
-The module is intentionally free of business logic (state transitions,
-validation) — that stays in JobService.  This layer only handles
-serialisation, schema management, and raw CRUD.
+The module handles serialization, schema management, and raw CRUD.
 """
 
-import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+import sqlite3
+from typing import List, Optional
 
 from app.models import (
     JobRecord,
@@ -19,33 +17,16 @@ from app.models import (
     ShortsGenerationResult,
     VideoSource,
 )
-
-
-_CREATE_TABLE_SQL = """\
-CREATE TABLE IF NOT EXISTS jobs (
-    job_id            TEXT PRIMARY KEY,
-    status            TEXT    NOT NULL,
-    progress_percent  REAL    NOT NULL DEFAULT 0.0,
-    message           TEXT    NOT NULL DEFAULT 'Job queued',
-    created_at        TEXT    NOT NULL,
-    started_at        TEXT,
-    completed_at      TEXT,
-    error             TEXT,
-    result_json       TEXT,
-    source_json       TEXT,
-    clip_duration     INTEGER,
-    number_of_clips   INTEGER,
-    user_id           TEXT
-);
-"""
+from app.services.db_migrations import run_sqlite_migrations
 
 _INSERT_SQL = """\
 INSERT INTO jobs (
     job_id, status, progress_percent, message,
     created_at, started_at, completed_at,
     error, result_json, source_json,
-    clip_duration, number_of_clips, user_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    clip_duration, number_of_clips, user_id,
+    retry_count, queue_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 _UPDATE_SQL = """\
@@ -57,7 +38,9 @@ UPDATE jobs SET
     completed_at     = ?,
     error            = ?,
     result_json      = ?,
-    user_id          = ?
+    user_id          = ?,
+    retry_count      = ?,
+    queue_name       = ?
 WHERE job_id = ?;
 """
 
@@ -66,19 +49,15 @@ INSERT OR REPLACE INTO jobs (
     job_id, status, progress_percent, message,
     created_at, started_at, completed_at,
     error, result_json, source_json,
-    clip_duration, number_of_clips, user_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    clip_duration, number_of_clips, user_id,
+    retry_count, queue_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 _SELECT_SQL = "SELECT * FROM jobs WHERE job_id = ?;"
 _SELECT_BY_USER_SQL = "SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC;"
 _SELECT_ALL_SQL = "SELECT * FROM jobs ORDER BY created_at DESC;"
 _DELETE_SQL = "DELETE FROM jobs WHERE job_id = ?;"
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _dt_to_str(dt: Optional[datetime]) -> Optional[str]:
@@ -88,7 +67,12 @@ def _dt_to_str(dt: Optional[datetime]) -> Optional[str]:
 
 def _str_to_dt(s: Optional[str]) -> Optional[datetime]:
     """Parse an ISO-8601 string back to a timezone-aware datetime (or None)."""
-    return datetime.fromisoformat(s) if s else None
+    if not s:
+        return None
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _job_to_row(job: JobRecord) -> tuple:
@@ -107,6 +91,8 @@ def _job_to_row(job: JobRecord) -> tuple:
         job.clip_duration,
         job.number_of_clips,
         job.user_id,
+        getattr(job, "retry_count", 0),
+        getattr(job, "queue_name", None),
     )
 
 
@@ -120,7 +106,6 @@ def _row_to_job(row: sqlite3.Row) -> JobRecord:
     if row["source_json"]:
         source = VideoSource.model_validate_json(row["source_json"])
 
-    # Safe handling of user_id for backward compatibility
     user_id: Optional[str] = None
     try:
         user_id = row["user_id"]
@@ -132,7 +117,7 @@ def _row_to_job(row: sqlite3.Row) -> JobRecord:
         status=JobStatus(row["status"]),
         progress_percent=row["progress_percent"],
         message=row["message"],
-        created_at=_str_to_dt(row["created_at"]),  # type: ignore[arg-type]
+        created_at=_str_to_dt(row["created_at"]) or datetime.now(timezone.utc),
         started_at=_str_to_dt(row["started_at"]),
         completed_at=_str_to_dt(row["completed_at"]),
         error=row["error"],
@@ -144,22 +129,8 @@ def _row_to_job(row: sqlite3.Row) -> JobRecord:
     )
 
 
-# ---------------------------------------------------------------------------
-# Store
-# ---------------------------------------------------------------------------
-
-
 class SQLiteJobStore:
-    """Thin persistence layer for JobRecords backed by a local SQLite file.
-
-    * ``db_path=":memory:"`` creates an ephemeral in-memory database (useful
-      for tests and backward-compatible zero-arg construction).  A single
-      persistent connection is kept because each ``sqlite3.connect(":memory:")``
-      creates a wholly separate database.
-    * Any other ``db_path`` creates/opens a file-based database whose parent
-      directories are automatically created.  A new connection is opened per
-      operation for safe multi-thread access.
-    """
+    """Thin persistence layer for JobRecords backed by a local SQLite file."""
 
     def __init__(self, db_path: str = ":memory:") -> None:
         self._db_path = db_path
@@ -167,8 +138,6 @@ class SQLiteJobStore:
         if not self._is_memory:
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # For in-memory DBs keep one long-lived connection (check_same_thread
-        # disabled; callers serialise writes via threading.Lock).
         if self._is_memory:
             self._shared_conn = self._new_connection()
         else:
@@ -192,18 +161,7 @@ class SQLiteJobStore:
 
     def _init_schema(self) -> None:
         conn = self._connect()
-        conn.execute(_CREATE_TABLE_SQL)
-        # Additive migration: check if user_id column exists
-        cursor = conn.execute("PRAGMA table_info(jobs);")
-        columns = [row["name"] for row in cursor.fetchall()]
-        if "user_id" not in columns:
-            try:
-                conn.execute("ALTER TABLE jobs ADD COLUMN user_id TEXT;")
-            except Exception:
-                pass
-        conn.commit()
-
-    # -- CRUD ---------------------------------------------------------------
+        run_sqlite_migrations(conn)
 
     def insert(self, job: JobRecord) -> None:
         """Insert a brand-new JobRecord. Raises on duplicate job_id."""
@@ -220,7 +178,7 @@ class SQLiteJobStore:
             return None
         return _row_to_job(row)
 
-    def list_by_user(self, user_id: Optional[str] = None) -> list[JobRecord]:
+    def list_by_user(self, user_id: Optional[str] = None) -> List[JobRecord]:
         """Fetch jobs owned by a specific user (or all jobs if user_id is None)."""
         with self._connect() as conn:
             if user_id:
@@ -248,13 +206,15 @@ class SQLiteJobStore:
             job.error,
             job.result.model_dump_json() if job.result else None,
             job.user_id,
+            getattr(job, "retry_count", 0),
+            getattr(job, "queue_name", None),
             job.job_id,
         )
         with self._connect() as conn:
             conn.execute(_UPDATE_SQL, params)
 
     def upsert(self, job: JobRecord) -> None:
-        """Insert or fully replace a JobRecord (used by the legacy proxy)."""
+        """Insert or fully replace a JobRecord (used by legacy proxies)."""
         row = _job_to_row(job)
         with self._connect() as conn:
             conn.execute(_UPSERT_SQL, row)

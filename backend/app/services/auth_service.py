@@ -18,6 +18,7 @@ from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.models import TokenResponse, User, UserCreate, UserLogin, UserResponse
+from app.services.db import UserStoreBase, create_user_store
 from app.services.user_sqlite import SQLiteUserStore
 
 _DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent.parent / "data"
@@ -63,28 +64,29 @@ def create_jwt_token(payload: Dict[str, Any], secret: str = AUTH_JWT_SECRET, exp
     }
     h_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).rstrip(b"=").decode()
     p_b64 = base64.urlsafe_b64encode(json.dumps(full_payload).encode()).rstrip(b"=").decode()
-    sig = hmac.new(secret.encode("utf-8"), f"{h_b64}.{p_b64}".encode("utf-8"), hashlib.sha256).digest()
-    s_b64 = base64.urlsafe_b64encode(sig).rstrip(b"=").decode()
+    signing_input = f"{h_b64}.{p_b64}".encode()
+    signature = hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
+    s_b64 = base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
     return f"{h_b64}.{p_b64}.{s_b64}"
 
 
 def decode_jwt_token(token: str, secret: str = AUTH_JWT_SECRET) -> Optional[Dict[str, Any]]:
-    """Verify and decode an HMAC-SHA256 JWT token."""
+    """Verify and decode a JWT token, returning the payload if valid and unexpired."""
     try:
         parts = token.split(".")
         if len(parts) != 3:
             return None
         h_b64, p_b64, s_b64 = parts
-        sig = hmac.new(secret.encode("utf-8"), f"{h_b64}.{p_b64}".encode("utf-8"), hashlib.sha256).digest()
-        rem_s = len(s_b64) % 4
-        padded_s = s_b64 + ("=" * (4 - rem_s) if rem_s else "")
-        expected_sig = base64.urlsafe_b64decode(padded_s)
-        if not hmac.compare_digest(sig, expected_sig):
+        signing_input = f"{h_b64}.{p_b64}".encode()
+        expected_sig = hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
+        actual_sig = base64.urlsafe_b64decode(s_b64 + "=" * (-len(s_b64) % 4))
+        if not hmac.compare_digest(expected_sig, actual_sig):
             return None
-        rem_p = len(p_b64) % 4
-        padded_p = p_b64 + ("=" * (4 - rem_p) if rem_p else "")
-        payload = json.loads(base64.urlsafe_b64decode(padded_p).decode("utf-8"))
-        if payload.get("exp") and time.time() > payload["exp"]:
+
+        payload_bytes = base64.urlsafe_b64decode(p_b64 + "=" * (-len(p_b64) % 4))
+        payload = json.loads(payload_bytes.decode())
+        exp = payload.get("exp")
+        if exp is not None and time.time() > exp:
             return None
         return payload
     except Exception:
@@ -94,8 +96,8 @@ def decode_jwt_token(token: str, secret: str = AUTH_JWT_SECRET) -> Optional[Dict
 class AuthService:
     """Provides user registration, credential verification, and token management."""
 
-    def __init__(self, user_store: Optional[SQLiteUserStore] = None) -> None:
-        self.user_store = user_store or SQLiteUserStore(db_path=_DEFAULT_DB_PATH)
+    def __init__(self, user_store: Optional[UserStoreBase] = None) -> None:
+        self.user_store = user_store or create_user_store()
 
     def register_user(self, data: UserCreate) -> TokenResponse:
         """Register a new user account and return an access token."""

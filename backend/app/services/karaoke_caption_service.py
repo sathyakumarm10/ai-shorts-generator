@@ -94,8 +94,8 @@ KARAOKE_PRESET_STYLES = {
 
 def _format_ass_timestamp(seconds: float) -> str:
     """Format floating seconds to ASS timestamp: H:MM:SS.cs (centiseconds)."""
-    clamped = max(0.0, float(seconds))
-    total_cs = int(round(clamped * 100))
+    clamped = max(0.0, seconds)
+    total_cs = round(clamped * 100)
     hours = total_cs // 360000
     total_cs %= 360000
     minutes = total_cs // 6000
@@ -187,7 +187,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 # Compute word-level karaoke \k durations in centiseconds
                 k_parts: List[str] = []
                 for word in ch:
-                    w_dur_cs = max(10, int(round((len(word) / max(ch_chars, 1)) * (ch_duration * 100))))
+                    w_dur_cs = max(10, round((len(word) / max(ch_chars, 1)) * (ch_duration * 100)))
                     safe_word = word.replace("{", "\\{").replace("}", "\\}")
                     k_parts.append(f"{{\\k{w_dur_cs}}}{safe_word}")
 

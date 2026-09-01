@@ -33,7 +33,7 @@ from app.services.video_ingestion_service import VideoIngestionError
 
 
 def make_test_candidate(start: float = 10.0, end: float = 40.0, text: str = "Test candidate text.") -> HighlightCandidate:
-    dur = float(round(end - start, 3))
+    dur = round(end - start, 3)
     return HighlightCandidate(
         start_seconds=start,
         end_seconds=end,

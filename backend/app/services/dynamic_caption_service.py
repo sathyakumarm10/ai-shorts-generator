@@ -214,7 +214,7 @@ class DynamicCaptionService:
             if i == len(chunks) - 1:
                 cur_end = segment.end_seconds
             else:
-                cur_end = float(round(cur_start + ch_duration, 3))
+                cur_end = round(cur_start + ch_duration, 3)
 
             # Ensure valid bounds
             cur_end = max(cur_start + 0.05, cur_end)

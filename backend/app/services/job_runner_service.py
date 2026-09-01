@@ -1,20 +1,15 @@
-"""Asynchronous job runner service using background thread pools.
+"""Asynchronous job runner service using background queues or thread pools.
 
 This module provides the `JobRunnerService` for executing `ShortsGenerationService`
 pipelines in the background without blocking FastAPI HTTP requests.
 
-Each submitted job receives its own `ShortsGenerationService` instance wired
-to job-scoped output directories under the configured media root:
-
-    outputs/jobs/{job_id}/source/     ← source video copy
-    outputs/jobs/{job_id}/clips/      ← raw highlight clips
-    outputs/jobs/{job_id}/vertical/   ← 9:16 vertical clips
-    outputs/jobs/{job_id}/captioned/  ← caption-burned final clips
+Supports both distributed Redis queues (with independent worker daemons) and
+in-process `ThreadPoolExecutor` execution for local development and fallback.
 """
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 import shutil
 
 from app.models import JobStatus, ShortsGenerationRequest, VideoSourceType
@@ -24,6 +19,13 @@ from app.services.highlight_clip_service import HighlightClipService
 from app.services.highlight_scoring_service import HighlightScoringService
 from app.services.job_service import JobService, default_job_service
 from app.services.media_storage_service import MediaStorageService, default_media_storage
+from app.services.queue_service import (
+    JobQueueBase,
+    QueueBackend,
+    QueueConfig,
+    create_job_queue,
+    default_job_queue,
+)
 from app.services.shorts_generation_service import ShortsGenerationService
 from app.services.transcription_service import FasterWhisperTranscriptionProvider, TranscriptionService
 from app.services.vertical_video_service import VerticalVideoService
@@ -33,7 +35,7 @@ from app.services.video_metadata_service import VideoMetadataService
 
 
 class JobRunnerService:
-    """Service responsible for executing video processing jobs asynchronously in background threads."""
+    """Service responsible for executing video processing jobs asynchronously."""
 
     def __init__(
         self,
@@ -41,22 +43,19 @@ class JobRunnerService:
         shorts_service: Optional[ShortsGenerationService] = None,
         max_workers: int = 4,
         media_storage: Optional[MediaStorageService] = None,
+        queue: Optional[JobQueueBase] = None,
     ) -> None:
         self.job_service = job_service or default_job_service
         self.media_storage = media_storage or default_media_storage
+        self.queue = queue if queue is not None else default_job_queue
 
-        # If a pre-built shorts_service is injected (e.g. in tests that supply
-        # mocks), store it for use when no per-job wiring is possible.
+        # If a pre-built shorts_service is injected (e.g. in tests that supply mocks)
         self._shared_shorts_service = shorts_service
 
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="shorts-job-runner")
 
     def _build_job_shorts_service(self, job_id: str) -> ShortsGenerationService:
-        """Construct a ShortsGenerationService with output dirs scoped to *job_id*.
-
-        Each stage writes into its own subdirectory under
-        ``{media_root}/jobs/{job_id}/``.
-        """
+        """Construct a ShortsGenerationService with output dirs scoped to *job_id*."""
         clips_dir = self.media_storage.get_job_subdir(job_id, MediaStorageService.CLIPS_SUBDIR)
         vertical_dir = self.media_storage.get_job_subdir(job_id, MediaStorageService.VERTICAL_SUBDIR)
         captioned_dir = self.media_storage.get_job_subdir(job_id, MediaStorageService.CAPTIONED_SUBDIR)
@@ -80,8 +79,8 @@ class JobRunnerService:
             ),
         )
 
-    def _execute_job_pipeline(self, job_id: str, request: ShortsGenerationRequest) -> None:
-        """Worker function executed inside the background thread pool."""
+    def execute_job_pipeline(self, job_id: str, request: ShortsGenerationRequest) -> None:
+        """Execute the full video processing pipeline for a job."""
 
         def on_stage_progress(status: JobStatus, progress_percent: float, message: str) -> None:
             try:
@@ -110,14 +109,11 @@ class JobRunnerService:
                         subdir=MediaStorageService.SOURCE_SUBDIR,
                         filename=src.name,
                     )
-                    # Rebuild request with the job-scoped source path so pipeline
-                    # services reference the copy inside the job directory.
                     from app.models import VideoSource
                     request = request.model_copy(
                         update={"source": VideoSource(type=request.source.type, location=str(dest))}
                     )
                 except Exception:
-                    # Non-fatal: fall back to original path if copy fails
                     pass
 
             # --- Use injected service (test mocks) or build a job-scoped one ---
@@ -145,10 +141,29 @@ class JobRunnerService:
                 self.job_service.fail_job(job_id=job_id, error=err_msg)
             except Exception:
                 pass
+            raise
 
     def submit_job(self, job_id: str, request: ShortsGenerationRequest) -> Future:
         """Submit a registered job for asynchronous background processing."""
+        # If queue is Redis, enqueue to distributed queue
+        from app.services.queue_service import RedisJobQueue
+        if isinstance(self.queue, RedisJobQueue):
+            payload = json_payload = request.model_dump(mode="json")
+            self.queue.enqueue(job_id, payload)
+            # Return an already resolved future for backward compatibility with tests expecting Future return type
+            fut: Future = Future()
+            fut.set_result(None)
+            return fut
+
+        # In-process ThreadPool execution
         return self._executor.submit(self._execute_job_pipeline, job_id, request)
+
+    def _execute_job_pipeline(self, job_id: str, request: ShortsGenerationRequest) -> None:
+        """Internal wrapper called by threadpool executor."""
+        try:
+            self.execute_job_pipeline(job_id, request)
+        except Exception:
+            pass
 
     def shutdown(self, wait: bool = False) -> None:
         """Shut down the background thread pool executor."""

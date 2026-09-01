@@ -1,6 +1,6 @@
 """SQLite storage layer for User persistence.
 
-Provides additive schema creation and CRUD operations for registered user records.
+Provides additive schema creation, migration execution, and CRUD operations for registered user records.
 """
 
 from datetime import datetime, timezone
@@ -9,17 +9,7 @@ import sqlite3
 from typing import Optional
 
 from app.models import User
-
-
-_CREATE_USERS_TABLE_SQL = """\
-CREATE TABLE IF NOT EXISTS users (
-    user_id        TEXT PRIMARY KEY,
-    email          TEXT UNIQUE NOT NULL,
-    password_hash  TEXT NOT NULL,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
-);
-"""
+from app.services.db_migrations import run_sqlite_migrations
 
 _INSERT_USER_SQL = """\
 INSERT INTO users (user_id, email, password_hash, created_at, updated_at)
@@ -31,7 +21,12 @@ _SELECT_BY_EMAIL_SQL = "SELECT * FROM users WHERE lower(email) = lower(?);"
 
 
 def _str_to_dt(s: Optional[str]) -> Optional[datetime]:
-    return datetime.fromisoformat(s) if s else None
+    if not s:
+        return None
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _dt_to_str(dt: Optional[datetime]) -> Optional[str]:
@@ -78,8 +73,7 @@ class SQLiteUserStore:
 
     def _init_schema(self) -> None:
         conn = self._connect()
-        conn.execute(_CREATE_USERS_TABLE_SQL)
-        conn.commit()
+        run_sqlite_migrations(conn)
 
     def create(self, user: User) -> User:
         """Insert a new user record. Raises sqlite3.IntegrityError if email or ID exists."""
