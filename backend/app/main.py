@@ -37,7 +37,7 @@ from app.services.auth_service import (
 from app.services.job_runner_service import default_job_runner
 from app.services.job_service import default_job_service
 from app.services.media_storage_service import default_media_storage
-from app.services.storage_service import default_storage_service
+from app.services.storage_service import default_storage_service, get_storage_report
 
 # Create the FastAPI application instance.
 app = FastAPI(title="AI Shorts Generator API")
@@ -87,6 +87,22 @@ def get_acceleration_status() -> Dict[str, Any]:
         "effective_whisper_device": report.effective_whisper_device,
         "effective_whisper_compute_type": report.effective_whisper_compute_type,
         "effective_video_encoder": report.effective_video_encoder,
+    }
+
+
+@app.get("/api/system/storage")
+def get_storage_status() -> Dict[str, Any]:
+    """Retrieve runtime object storage backend diagnostics and active capabilities."""
+    report = get_storage_report(default_storage_service)
+    return {
+        "backend": report.backend,
+        "configured_backend": report.configured_backend,
+        "bucket": report.bucket,
+        "region": report.region,
+        "endpoint_url": report.endpoint_url,
+        "public_base_url": report.public_base_url,
+        "is_cloud_active": report.is_cloud_active,
+        "local_fallback_enabled": report.local_fallback_enabled,
     }
 
 
@@ -342,7 +358,7 @@ def delete_job(
     job_id: str,
     current_user: Optional[User] = Depends(get_optional_user),
 ) -> Dict[str, Any]:
-    """Delete a job record, ensuring only the owner can delete it."""
+    """Delete a job record and associated media artifacts, ensuring only the owner can delete it."""
     job = default_job_service.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -351,4 +367,5 @@ def delete_job(
         raise HTTPException(status_code=403, detail="Forbidden: You cannot delete another user's job.")
 
     default_job_service.delete_job(job_id, user_id=current_user.user_id if current_user else None)
+    default_media_storage.delete_job_media(job_id)
     return {"message": "Job deleted successfully."}

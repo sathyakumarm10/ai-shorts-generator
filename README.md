@@ -141,12 +141,34 @@ To run the full stack with NVIDIA GPU passthrough enabled:
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 ```
 
-### 4. Running Tests
+### 4. Cloud Storage: AWS S3 & Cloudflare R2 Integration
+
+AI Shorts Generator provides native cloud object storage for source video uploads and generated shorts artifacts:
+- **Supported Backends**: `local` (default), `s3` (AWS S3), `r2` (Cloudflare R2), `minio`, and `wasabi`.
+- **Pure Python SigV4 Pre-Signing**: Secure presigned media URLs with custom expiry and zero heavy external dependencies.
+- **Exponential Backoff Retries**: Automatic retries on transient network and 5xx/429 storage errors.
+- **Automatic Local Fallback**: Seamless fallback to local disk storage if cloud credentials or network connections are unavailable.
+- **Diagnostics API**: Live storage status and health reporting via `GET /api/system/storage`.
+
+#### S3 / Cloudflare R2 Configuration (.env)
+```ini
+STORAGE_BACKEND=s3                      # "local", "s3", "r2", "minio", "wasabi"
+S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com  # Required for R2/MinIO, optional for AWS
+S3_REGION=us-east-1                     # "us-east-1" for AWS, "auto" for Cloudflare R2
+S3_BUCKET=ai-shorts-bucket
+S3_ACCESS_KEY_ID=your_access_key
+S3_SECRET_ACCESS_KEY=your_secret_key
+S3_PUBLIC_BASE_URL=https://media.domain.com  # Optional custom CDN domain
+S3_PRESIGNED_EXPIRY=3600               # Presigned URL expiry in seconds
+STORAGE_MAX_RETRIES=3                   # Retry attempts on transient network errors
+STORAGE_ENABLE_LOCAL_FALLBACK=true      # Seamless fallback to disk storage on failure
+```
+
+### 5. Running Tests
 
 Run the complete test suite:
 
 ```powershell
 .\backend\venv\Scripts\python.exe -m pytest tests -q
 ```
-
 

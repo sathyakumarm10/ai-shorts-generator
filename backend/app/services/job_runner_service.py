@@ -131,6 +131,12 @@ class JobRunnerService:
                 progress_callback=on_stage_progress,
             )
 
+            # --- Cloud Storage sync (uploads generated artifacts if S3/R2 configured) ---
+            try:
+                self.media_storage.sync_job_to_cloud(job_id)
+            except Exception:
+                pass
+
             self.job_service.complete_job(job_id=job_id, result=result)
 
         except Exception as exc:

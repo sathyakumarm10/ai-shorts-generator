@@ -27,11 +27,15 @@ configured media root, rejecting ``..`` traversal, symlink escapes, and
 paths rooted outside the tree.
 """
 
+import logging
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 from uuid import uuid4
 
+from app.services.storage_service import S3StorageService, StorageService, default_storage_service
+
+logger = logging.getLogger(__name__)
 
 # Default media root (relative to CWD at runtime; overridable via constructor).
 DEFAULT_MEDIA_ROOT = Path("outputs")
@@ -49,6 +53,8 @@ class MediaStorageService:
     media_root : Path | str
         Absolute or relative path to the root directory that holds all
         job artefacts.  Defaults to ``outputs/``.
+    storage_service : StorageService | None
+        Underlying object storage backend (local, S3, Cloudflare R2).
     """
 
     # Sub-directory names within each job directory
@@ -57,8 +63,13 @@ class MediaStorageService:
     VERTICAL_SUBDIR = "vertical"
     CAPTIONED_SUBDIR = "captioned"
 
-    def __init__(self, media_root: Path | str = DEFAULT_MEDIA_ROOT) -> None:
+    def __init__(
+        self,
+        media_root: Path | str = DEFAULT_MEDIA_ROOT,
+        storage_service: Optional[StorageService] = None,
+    ) -> None:
         self.media_root = Path(media_root).resolve()
+        self.storage_service = storage_service or default_storage_service
 
     # ------------------------------------------------------------------ #
     # Directory helpers                                                    #
@@ -181,7 +192,7 @@ class MediaStorageService:
         return rel.as_posix()
 
     def to_media_url(self, abs_path: Path | str) -> str:
-        """Build a browser-accessible ``/api/media?path=<relative>`` URL.
+        """Build a browser-accessible ``/api/media?path=<relative>`` or signed cloud URL.
 
         Parameters
         ----------
@@ -191,11 +202,56 @@ class MediaStorageService:
         Returns
         -------
         str
-            Relative URL string, e.g.
-            ``/api/media?path=jobs/abc123/captioned/captioned_xyz.mp4``
+            Relative URL string or presigned cloud URL.
         """
         rel = self.to_relative_path(abs_path)
+        if isinstance(self.storage_service, S3StorageService) and self.storage_service.access_key_id:
+            try:
+                return self.storage_service.get_presigned_url(rel)
+            except Exception:
+                pass
         return f"/api/media?path={rel}"
+
+    def sync_job_to_cloud(self, job_id: str) -> Dict[str, str]:
+        """Upload all generated media artifacts for job_id to cloud storage.
+
+        Returns
+        -------
+        Dict[str, str]
+            Map of relative paths to cloud storage URLs.
+        """
+        self._validate_job_id(job_id)
+        job_dir = self.media_root / "jobs" / job_id
+        uploaded: Dict[str, str] = {}
+
+        if not job_dir.is_dir():
+            return uploaded
+
+        for file_path in job_dir.rglob("*"):
+            if file_path.is_file():
+                try:
+                    rel_key = file_path.relative_to(self.media_root).as_posix()
+                    url = self.storage_service.upload_file(local_source_path=file_path, destination_key=rel_key)
+                    uploaded[rel_key] = url
+                except Exception as exc:
+                    logger.warning(f"Failed to sync '{file_path.name}' to cloud storage: {exc}")
+
+        return uploaded
+
+    def delete_job_media(self, job_id: str) -> None:
+        """Delete local media directory and cloud storage prefix for job_id."""
+        self._validate_job_id(job_id)
+        job_dir = self.media_root / "jobs" / job_id
+
+        # Clean up local directory
+        if job_dir.is_dir():
+            shutil.rmtree(str(job_dir), ignore_errors=True)
+
+        # Clean up cloud storage prefix
+        try:
+            self.storage_service.delete_prefix(f"jobs/{job_id}/")
+        except Exception as exc:
+            logger.warning(f"Failed to clean up cloud storage for job '{job_id}': {exc}")
 
     # ------------------------------------------------------------------ #
     # Validation helpers                                                   #
