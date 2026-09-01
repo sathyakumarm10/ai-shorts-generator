@@ -1,0 +1,65 @@
+# ==============================================================================
+# AI Shorts Generator - Docker Build Ignore
+# Excludes unnecessary files, caches, virtualenvs, local databases, and secrets
+# ==============================================================================
+
+# Version control
+.git
+.gitignore
+
+# Environment variables & secrets (NEVER send to Docker daemon)
+.env
+.env.*
+*.env
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# Python virtualenvs, bytecode & caches
+backend/venv/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Node.js dependencies & builds
+frontend/node_modules/
+node_modules/
+frontend/dist/
+dist/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+
+# Local SQLite databases & runtime data
+data/*.sqlite3
+data/*.db
+backend/data/*.sqlite3
+*.sqlite3
+*.db
+
+# Local media, uploads, and temporary outputs
+downloads/
+outputs/
+uploads/
+media/
+tmp/
+temp/
+*.tmp
+*.mp4
+*.mov
+*.wav
+*.mp3
+
+# IDE and OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

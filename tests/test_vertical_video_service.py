@@ -32,13 +32,13 @@ class TestVerticalVideoRequestModel:
 
     def test_reject_zero_or_negative_dimensions(self):
         with pytest.raises(ValidationError):
-            VerticalVideoRequest(width=0, height=1920)
+            VerticalVideoRequest(width=0, height=1920)  # type: ignore[arg-type] # pyrefly: ignore
         with pytest.raises(ValidationError):
-            VerticalVideoRequest(width=1080, height=0)
+            VerticalVideoRequest(width=1080, height=0)  # type: ignore[arg-type] # pyrefly: ignore
         with pytest.raises(ValidationError):
-            VerticalVideoRequest(width=-1080, height=1920)
+            VerticalVideoRequest(width=-1080, height=1920)  # type: ignore[arg-type] # pyrefly: ignore
         with pytest.raises(ValidationError):
-            VerticalVideoRequest(width=1080, height=-1920)
+            VerticalVideoRequest(width=1080, height=-1920)  # type: ignore[arg-type] # pyrefly: ignore
 
     def test_reject_invalid_aspect_ratios(self):
         # 16:9 landscape aspect ratio

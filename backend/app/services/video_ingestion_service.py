@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
-import yt_dlp
+# pyrefly: ignore [missing-import-source]
+import yt_dlp  # type: ignore
 
 from app.models import IngestedVideo, VideoSource, VideoSourceType
 
@@ -58,7 +59,12 @@ class VideoIngestionService:
         try:
             with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
                 info = ydl.extract_info(location, download=True)
-                downloaded_file = Path(ydl.prepare_filename(info))
+                if not info:
+                    raise VideoIngestionError("No video information could be retrieved from YouTube.")
+                filename = ydl.prepare_filename(info)
+                if not filename:
+                    raise VideoIngestionError("Failed to determine downloaded video filename.")
+                downloaded_file = Path(filename)
         except Exception as exc:
             raise VideoIngestionError(f"Failed to download YouTube video: {exc}") from exc
 

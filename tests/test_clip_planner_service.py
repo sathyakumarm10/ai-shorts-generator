@@ -56,9 +56,9 @@ class TestPlannedClipModel:
 
     def test_reject_zero_or_negative_index(self):
         with pytest.raises(ValidationError):
-            PlannedClip(index=0, start_seconds=0.0, duration_seconds=60.0, end_seconds=60.0)
+            PlannedClip(index=0, start_seconds=0.0, duration_seconds=60.0, end_seconds=60.0)  # type: ignore[arg-type] # pyrefly: ignore
         with pytest.raises(ValidationError):
-            PlannedClip(index=-1, start_seconds=0.0, duration_seconds=60.0, end_seconds=60.0)
+            PlannedClip(index=-1, start_seconds=0.0, duration_seconds=60.0, end_seconds=60.0)  # type: ignore[arg-type] # pyrefly: ignore
 
     def test_reject_negative_start_seconds(self):
         with pytest.raises(ValidationError):

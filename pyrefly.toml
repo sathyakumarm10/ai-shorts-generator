@@ -1,7 +1,10 @@
 # Pyrefly Language Server Configuration
 
-[tool.pyrefly]
-project-includes = ["backend/**/*.py", "tests/**/*.py"]
+project-includes = [
+    "backend/**/*.py",
+    "tests/**/*.py"
+]
+
 project-excludes = [
     "**/venv/**",
     "**/node_modules/**",
@@ -10,7 +13,9 @@ project-excludes = [
     "**/dist/**"
 ]
 
-search-path = ["backend"]
+search-path = [
+    "backend"
+]
 
 python-interpreter-path = "backend/venv/Scripts/python.exe"
 

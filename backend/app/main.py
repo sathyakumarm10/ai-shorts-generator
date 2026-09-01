@@ -5,6 +5,7 @@ request validation, and HTTP responses/errors, while delegating job lifecycle
 and asynchronous processing to the service layer.
 """
 
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -40,10 +41,16 @@ from app.services.storage_service import default_storage_service
 # Create the FastAPI application instance.
 app = FastAPI(title="AI Shorts Generator API")
 
-# Enable CORS for frontend clients
+# Enable CORS for frontend clients with configurable origins support
+raw_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").strip()
+if raw_allowed_origins == "*" or not raw_allowed_origins:
+    allowed_origins = ["*"]
+else:
+    allowed_origins = [orig.strip() for orig in raw_allowed_origins.split(",") if orig.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

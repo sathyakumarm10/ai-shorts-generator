@@ -200,7 +200,7 @@ class ShortsGenerationService:
                 raise ShortsGenerationError(f"Highlight candidate generation failed: {exc}") from exc
 
         if not candidates:
-            report_progress(JobStatus.COMPLETED, 100.0, "No candidate clips found")
+            report_progress(JobStatus.FINDING_HIGHLIGHTS, 60.0, "No candidate clips found in transcript")
             return ShortsGenerationResult(
                 source_video=ingested_video,
                 metadata=metadata,
@@ -250,8 +250,8 @@ class ShortsGenerationService:
                     # Check if transcript segment overlaps candidate window
                     if seg.end_seconds > c_start and seg.start_seconds < c_end:
                         # Shift timestamp to local clip time coordinate [0.0, duration]
-                        rel_start = max(0.0, float(round(seg.start_seconds - c_start, 3)))
-                        rel_end = min(cand.duration_seconds, float(round(seg.end_seconds - c_start, 3)))
+                        rel_start = max(0.0, round(seg.start_seconds - c_start, 3))
+                        rel_end = min(cand.duration_seconds, round(seg.end_seconds - c_start, 3))
                         clean_text = seg.text.strip()
                         if rel_end > rel_start and clean_text:
                             relative_segments.append(

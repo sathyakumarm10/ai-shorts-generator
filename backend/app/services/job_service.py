@@ -229,13 +229,17 @@ class JobService:
 
             now = datetime.now(timezone.utc)
             started_at = job.started_at or now
+            completed_at = job.completed_at
+            if status in (JobStatus.COMPLETED, JobStatus.FAILED) and completed_at is None:
+                completed_at = now
 
             updated_job = job.model_copy(
                 update={
                     "status": status,
-                    "progress_percent": max(0.0, min(100.0, float(progress_percent))),
+                    "progress_percent": max(0.0, min(100.0, progress_percent)),
                     "message": message.strip() if message else job.message,
                     "started_at": started_at,
+                    "completed_at": completed_at,
                 }
             )
             try:

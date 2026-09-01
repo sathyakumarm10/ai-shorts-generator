@@ -6,6 +6,7 @@ endpoints continue to work after adding the new job creation endpoint.
 
 from concurrent.futures import Future
 from unittest.mock import MagicMock
+# pyrefly: ignore [missing-import]
 import pytest
 from fastapi.testclient import TestClient
 

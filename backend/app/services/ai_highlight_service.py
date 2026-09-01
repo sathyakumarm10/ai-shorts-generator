@@ -223,14 +223,14 @@ class AIHighlightService:
             if not isinstance(start_s, (int, float)) or not isinstance(end_s, (int, float)):
                 continue
 
-            start_s = float(round(start_s, 2))
-            end_s = float(round(end_s, 2))
+            start_s = round(start_s, 2)
+            end_s = round(end_s, 2)
 
             # Reject negative or out-of-bounds timestamps
             if start_s < 0.0 or end_s <= start_s or end_s > (max_limit + 1.5):
                 continue
 
-            dur = float(round(end_s - start_s, 2))
+            dur = round(end_s - start_s, 2)
             # Relax slightly for boundary segment snapping (within 10%)
             if dur < (min_duration * 0.85) or dur > (max_duration * 1.15):
                 continue
@@ -249,11 +249,11 @@ class AIHighlightService:
             raw_score_val = item.get("score")
             raw_score: dict = raw_score_val if isinstance(raw_score_val, dict) else {}
             score = HighlightScore(
-                overall=float(min(1.0, max(0.0, raw_score.get("overall", 0.90)))),
-                hook=float(min(1.0, max(0.0, raw_score.get("hook", 0.85)))),
-                emotion=float(min(1.0, max(0.0, raw_score.get("emotion", 0.80)))),
-                curiosity=float(min(1.0, max(0.0, raw_score.get("curiosity", 0.85)))),
-                information_density=float(min(1.0, max(0.0, raw_score.get("information_density", 0.80)))),
+                overall=min(1.0, max(0.0, float(raw_score.get("overall", 0.90)))),
+                hook=min(1.0, max(0.0, float(raw_score.get("hook", 0.85)))),
+                emotion=min(1.0, max(0.0, float(raw_score.get("emotion", 0.80)))),
+                curiosity=min(1.0, max(0.0, float(raw_score.get("curiosity", 0.85)))),
+                information_density=min(1.0, max(0.0, float(raw_score.get("information_density", 0.80)))),
             )
 
             title = item.get("title")
