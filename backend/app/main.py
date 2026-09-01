@@ -1,21 +1,16 @@
-"""Entry point for the AI Shorts Generator FastAPI application.
-
-This module exposes endpoints for the backend, handling HTTP routing,
-request validation, and HTTP responses/errors, while delegating job lifecycle
-and asynchronous processing to the service layer.
-"""
-
+import logging
 import os
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Security, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import ValidationError
 
@@ -45,11 +40,79 @@ from app.services.db import get_database_report
 from app.services.job_runner_service import default_job_runner
 from app.services.job_service import default_job_service
 from app.services.media_storage_service import default_media_storage
+from app.services.observability import (
+    default_metrics_collector,
+    get_correlation_id,
+    get_request_id,
+    log_audit_event,
+    set_correlation_id,
+    set_request_id,
+    setup_logging,
+)
 from app.services.queue_service import default_job_queue, get_queue_report
 from app.services.storage_service import default_storage_service, get_storage_report
 
+# Initialize structured logging subsystem
+setup_logging()
+logger = logging.getLogger(__name__)
+
 # Create the FastAPI application instance.
 app = FastAPI(title="AI Shorts Generator API")
+
+# ---------------------------------------------------------------------------
+# Observability Middleware (Request Tracing, Latency Metrics & Error Handling)
+# ---------------------------------------------------------------------------
+
+
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    """Trace incoming HTTP requests with request/correlation IDs, timing metrics, and error logging."""
+    req_id = request.headers.get("X-Request-ID") or uuid4().hex
+    corr_id = request.headers.get("X-Correlation-ID") or req_id
+    set_request_id(req_id)
+    set_correlation_id(corr_id)
+
+    start_time = time.perf_counter()
+    try:
+        response = await call_next(request)
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+
+        response.headers["X-Request-ID"] = req_id
+        response.headers["X-Correlation-ID"] = corr_id
+        response.headers["X-Response-Time"] = f"{duration_ms:.2f}ms"
+
+        default_metrics_collector.record_http_request(
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_ms=duration_ms,
+        )
+        return response
+    except Exception as exc:
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+        default_metrics_collector.record_http_request(
+            method=request.method,
+            path=request.url.path,
+            status_code=500,
+            duration_ms=duration_ms,
+        )
+        logger.exception(
+            "Unhandled server exception processing %s %s: %s",
+            request.method,
+            request.url.path,
+            exc,
+            extra={"request_id": req_id, "correlation_id": corr_id},
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal Server Error", "request_id": req_id},
+            headers={
+                "X-Request-ID": req_id,
+                "X-Correlation-ID": corr_id,
+                "X-Response-Time": f"{duration_ms:.2f}ms",
+            },
+        )
+
 
 # Enable CORS for frontend clients with secure credentials and origins configuration
 raw_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").strip()
@@ -81,11 +144,29 @@ def read_root():
 
 @app.get("/health")
 def health_check() -> Dict[str, Any]:
-    """Health check endpoint used to verify service and subsystem readiness."""
+    """Health check endpoint evaluating overall system readiness and individual subsystems."""
     db_rep = get_database_report()
     q_rep = get_queue_report(default_job_queue)
+    storage_rep = get_storage_report(default_storage_service)
+    accel_rep = default_acceleration_service.get_acceleration_report()
+    metrics = default_metrics_collector.get_metrics_report()
+
+    # Determine aggregated health status
+    db_connected = db_rep.connected
+    q_connected = q_rep.connected
+    if not db_connected and not q_connected:
+        overall_status = "unhealthy"
+    elif not db_connected or not q_connected:
+        overall_status = "degraded"
+    else:
+        overall_status = "ok"
+
     return {
-        "status": "ok",
+        "status": overall_status,
+        "timestamp": metrics["timestamp"],
+        "uptime_seconds": metrics["uptime_seconds"],
+        "version": "1.0.0",
+        # Backward-compatible direct keys
         "database": {
             "backend": db_rep.backend,
             "connected": db_rep.connected,
@@ -96,7 +177,58 @@ def health_check() -> Dict[str, Any]:
             "connected": q_rep.connected,
             "pending_count": q_rep.pending_count,
         },
+        # Enhanced subsystem diagnostic reports
+        "subsystems": {
+            "database": {
+                "status": "ok" if db_connected else "error",
+                "backend": db_rep.backend,
+                "connected": db_rep.connected,
+                "database_name": db_rep.database_name,
+                "host": db_rep.host,
+                "port": db_rep.port,
+                "migration_version": db_rep.migration_version,
+                "latency_ms": db_rep.latency_ms,
+                "local_fallback_active": db_rep.local_fallback_active,
+                "error": db_rep.error,
+            },
+            "queue": {
+                "status": "ok" if q_connected else "error",
+                "backend": q_rep.backend,
+                "connected": q_rep.connected,
+                "pending_count": q_rep.pending_count,
+                "processing_count": q_rep.processing_count,
+                "delayed_count": q_rep.delayed_count,
+                "dead_letter_count": q_rep.dead_letter_count,
+                "active_workers_count": q_rep.active_workers_count,
+                "local_fallback_active": q_rep.local_fallback_active,
+                "latency_ms": q_rep.latency_ms,
+                "error": q_rep.error,
+            },
+            "storage": {
+                "status": "ok",
+                "backend": storage_rep.backend,
+                "configured_backend": storage_rep.configured_backend,
+                "bucket": storage_rep.bucket,
+                "region": storage_rep.region,
+                "is_cloud_active": storage_rep.is_cloud_active,
+                "local_fallback_enabled": storage_rep.local_fallback_enabled,
+            },
+            "acceleration": {
+                "status": "ok",
+                "cuda_available": accel_rep.cuda_available,
+                "nvenc_available": accel_rep.nvenc_available,
+                "effective_whisper_device": accel_rep.effective_whisper_device,
+                "effective_video_encoder": accel_rep.effective_video_encoder,
+            },
+        },
     }
+
+
+@app.get("/api/system/metrics")
+def get_system_metrics() -> Dict[str, Any]:
+    """Retrieve runtime operational metrics, HTTP statistics, pipeline performance, and system resources."""
+    return default_metrics_collector.get_metrics_report()
+
 
 
 @app.get("/api/system/acceleration")
@@ -177,14 +309,34 @@ def get_queue_status() -> Dict[str, Any]:
 def register(payload: UserCreate, request: Request) -> TokenResponse:
     """Register a new user account with unique email and secure hashed password."""
     user_agent = request.headers.get("user-agent")
-    return default_auth_service.register_user(payload, user_agent=user_agent)
+    ip_addr = request.client.host if request.client else None
+    result = default_auth_service.register_user(payload, user_agent=user_agent)
+    log_audit_event(
+        action="auth.register",
+        status="success",
+        user_id=result.user.user_id,
+        details={"email": result.user.email, "role": result.user.role.value if hasattr(result.user.role, "value") else str(result.user.role)},
+        ip_address=ip_addr,
+        user_agent=user_agent,
+    )
+    return result
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
 def login(payload: UserLogin, request: Request) -> TokenResponse:
     """Authenticate with email and password and return a JWT access and refresh token pair."""
     user_agent = request.headers.get("user-agent")
-    return default_auth_service.authenticate_user(payload, user_agent=user_agent)
+    ip_addr = request.client.host if request.client else None
+    result = default_auth_service.authenticate_user(payload, user_agent=user_agent)
+    log_audit_event(
+        action="auth.login",
+        status="success",
+        user_id=result.user.user_id,
+        details={"email": result.user.email},
+        ip_address=ip_addr,
+        user_agent=user_agent,
+    )
+    return result
 
 
 @app.get("/api/auth/me", response_model=UserResponse)
@@ -207,12 +359,29 @@ def refresh_token(
 ) -> TokenResponse:
     """Refresh tokens: rotates refresh token or falls back to legacy Bearer refresh for backward compatibility."""
     user_agent = request.headers.get("user-agent")
+    ip_addr = request.client.host if request.client else None
     if payload and payload.refresh_token:
-        return default_auth_service.refresh_tokens(payload.refresh_token, user_agent=user_agent)
+        result = default_auth_service.refresh_tokens(payload.refresh_token, user_agent=user_agent)
+        log_audit_event(
+            action="auth.refresh",
+            status="success",
+            user_id=result.user.user_id,
+            ip_address=ip_addr,
+            user_agent=user_agent,
+        )
+        return result
 
     # Backward compatibility fallback for legacy clients calling /api/auth/refresh with Bearer token
     if current_user is not None:
-        return default_auth_service._issue_tokens_for_user(current_user, user_agent=user_agent)
+        result = default_auth_service._issue_tokens_for_user(current_user, user_agent=user_agent)
+        log_audit_event(
+            action="auth.refresh_legacy",
+            status="success",
+            user_id=current_user.user_id,
+            ip_address=ip_addr,
+            user_agent=user_agent,
+        )
+        return result
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
@@ -222,12 +391,20 @@ def refresh_token(
 
 @app.post("/api/auth/logout")
 def logout(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Security(security_bearer),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Logout endpoint: revokes access token JTI and invalidates user sessions."""
     raw_token = credentials.credentials if credentials else None
     default_auth_service.logout_user(raw_token, current_user)
+    log_audit_event(
+        action="auth.logout",
+        status="success",
+        user_id=current_user.user_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
     return {"message": "Logged out successfully."}
 
 
@@ -240,19 +417,39 @@ def list_sessions(current_user: User = Depends(get_current_user)) -> List[Sessio
 @app.delete("/api/auth/sessions/{token_id}")
 def revoke_session(
     token_id: str,
+    request: Request,
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Revoke a specific user session."""
     success = default_auth_service.revoke_session(current_user.user_id, token_id)
     if not success:
         raise HTTPException(status_code=404, detail="Session not found or already revoked.")
+    log_audit_event(
+        action="auth.session_revoked",
+        status="success",
+        user_id=current_user.user_id,
+        resource_id=token_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
     return {"message": "Session revoked successfully."}
 
 
 @app.get("/api/admin/users", response_model=List[UserResponse])
-def admin_list_users(admin_user: User = Depends(require_admin)) -> List[UserResponse]:
+def admin_list_users(
+    request: Request,
+    admin_user: User = Depends(require_admin),
+) -> List[UserResponse]:
     """Admin-only endpoint: list all registered users (RBAC enforced)."""
     users = default_auth_service.user_store.list_all()
+    log_audit_event(
+        action="admin.users_list",
+        status="success",
+        user_id=admin_user.user_id,
+        details={"returned_count": len(users)},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
     return [
         UserResponse(
             user_id=u.user_id,
@@ -272,6 +469,7 @@ def admin_list_users(admin_user: User = Depends(require_admin)) -> List[UserResp
 
 @app.post("/api/upload")
 async def upload_video(
+    request: Request,
     file: UploadFile = File(...),
     current_user: Optional[User] = Depends(get_optional_user),
 ) -> Dict[str, Any]:
@@ -303,6 +501,17 @@ async def upload_video(
     if file_size == 0:
         dest_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes)")
+
+    default_metrics_collector.record_storage_operation("upload", bytes_count=file_size, success=True)
+    log_audit_event(
+        action="media.upload",
+        status="success",
+        user_id=user_prefix,
+        resource_id=safe_name,
+        details={"file_size_bytes": file_size, "filename": file.filename},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
 
     return {
         "file_path": str(dest_path.resolve()),
@@ -412,6 +621,7 @@ def list_jobs(current_user: Optional[User] = Depends(get_optional_user)) -> List
 
 @app.post("/api/jobs", response_model=JobRecord)
 def create_job(
+    request: Request,
     payload: Dict[str, Any],
     current_user: Optional[User] = Depends(get_optional_user),
 ) -> JobRecord:
@@ -437,6 +647,18 @@ def create_job(
 
     job_record = default_job_service.create_job(shorts_req, user_id=user_id)
     default_job_runner.submit_job(job_record.job_id, shorts_req)
+    default_metrics_collector.record_job_event("created")
+
+    log_audit_event(
+        action="job.create",
+        status="success",
+        user_id=user_id,
+        resource_id=job_record.job_id,
+        details={"clip_duration": shorts_req.clip_duration_seconds, "number_of_clips": shorts_req.number_of_clips},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
     return job_record
 
 
@@ -461,6 +683,7 @@ def get_job(
 @app.delete("/api/jobs/{job_id}")
 def delete_job(
     job_id: str,
+    request: Request,
     current_user: Optional[User] = Depends(get_optional_user),
 ) -> Dict[str, Any]:
     """Delete a job record and associated media artifacts, ensuring only the owner can delete it."""
@@ -471,6 +694,17 @@ def delete_job(
     if job.user_id and (not current_user or current_user.user_id != job.user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You cannot delete another user's job.")
 
-    default_job_service.delete_job(job_id, user_id=current_user.user_id if current_user else None)
+    user_id = current_user.user_id if current_user else None
+    default_job_service.delete_job(job_id, user_id=user_id)
     default_media_storage.delete_job_media(job_id)
+
+    log_audit_event(
+        action="job.delete",
+        status="success",
+        user_id=user_id,
+        resource_id=job_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
     return {"message": "Job deleted successfully."}

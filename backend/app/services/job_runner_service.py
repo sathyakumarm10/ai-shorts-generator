@@ -93,6 +93,14 @@ class JobRunnerService:
             except Exception:
                 pass
 
+        import time
+        from app.services.observability import default_metrics_collector, log_audit_event, set_job_id
+
+        set_job_id(job_id)
+        default_metrics_collector.record_job_event("processing")
+        log_audit_event("job.started", "success", resource_id=job_id)
+        t_start = time.perf_counter()
+
         try:
             on_stage_progress(JobStatus.INGESTING, 10.0, "Starting video ingestion")
 
@@ -133,10 +141,18 @@ class JobRunnerService:
             except Exception:
                 pass
 
+            duration_ms = (time.perf_counter() - t_start) * 1000.0
+            default_metrics_collector.record_stage_duration("e2e_pipeline", duration_ms)
+            default_metrics_collector.record_job_event("completed")
+            log_audit_event("job.completed", "success", resource_id=job_id, details={"duration_ms": round(duration_ms, 2)})
+
             self.job_service.complete_job(job_id=job_id, result=result)
 
         except Exception as exc:
+            duration_ms = (time.perf_counter() - t_start) * 1000.0
             err_msg = str(exc) or "Unexpected error during pipeline execution"
+            default_metrics_collector.record_job_event("failed")
+            log_audit_event("job.failed", "error", resource_id=job_id, details={"error": err_msg, "duration_ms": round(duration_ms, 2)})
             try:
                 self.job_service.fail_job(job_id=job_id, error=err_msg)
             except Exception:
