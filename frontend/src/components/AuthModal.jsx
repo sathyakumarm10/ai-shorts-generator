@@ -39,8 +39,8 @@ export function AuthModal({ isOpen, onClose }) {
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.75)',
-      backdropFilter: 'blur(8px)',
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      backdropFilter: 'blur(4px)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -53,12 +53,12 @@ export function AuthModal({ isOpen, onClose }) {
         style={{
           width: '100%',
           maxWidth: '420px',
-          background: '#141414',
+          background: '#FFFFFF',
           border: '1px solid var(--border-subtle)',
           borderRadius: 'var(--radius-md)',
           padding: '2rem',
           position: 'relative',
-          boxShadow: '0 20px 40px rgba(0, 0, 0, 0.5)',
+          boxShadow: '0 10px 30px rgba(0, 0, 0, 0.1)',
         }}
       >
         <button
@@ -120,10 +120,10 @@ export function AuthModal({ isOpen, onClose }) {
                 style={{
                   width: '100%',
                   padding: '0.65rem 0.8rem 0.65rem 2.4rem',
-                  background: 'rgba(255, 255, 255, 0.05)',
+                  background: '#FFFFFF',
                   border: '1px solid var(--border-subtle)',
                   borderRadius: 'var(--radius-sm)',
-                  color: '#fff',
+                  color: '#000000',
                   fontSize: '0.9rem',
                   outline: 'none',
                 }}
@@ -147,10 +147,10 @@ export function AuthModal({ isOpen, onClose }) {
                 style={{
                   width: '100%',
                   padding: '0.65rem 0.8rem 0.65rem 2.4rem',
-                  background: 'rgba(255, 255, 255, 0.05)',
+                  background: '#FFFFFF',
                   border: '1px solid var(--border-subtle)',
                   borderRadius: 'var(--radius-sm)',
-                  color: '#fff',
+                  color: '#000000',
                   fontSize: '0.9rem',
                   outline: 'none',
                 }}

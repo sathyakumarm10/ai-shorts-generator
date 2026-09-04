@@ -67,9 +67,9 @@ export function JobHistoryModal({ isOpen, onClose, history, onSelectJob, onClear
                         fontSize: '0.72rem',
                         fontWeight: 600,
                         textTransform: 'uppercase',
-                        background: isCompleted ? 'rgba(16, 185, 129, 0.12)' : isFailed ? 'rgba(239, 68, 68, 0.12)' : 'rgba(255, 255, 255, 0.08)',
-                        color: isCompleted ? '#10B981' : isFailed ? '#EF4444' : '#FFFFFF',
-                        border: `1px solid ${isCompleted ? 'rgba(16, 185, 129, 0.25)' : isFailed ? 'rgba(239, 68, 68, 0.25)' : '#333333'}`,
+                        background: isCompleted ? 'rgba(16, 185, 129, 0.1)' : isFailed ? 'rgba(239, 68, 68, 0.1)' : '#F5F5F5',
+                        color: isCompleted ? '#16A34A' : isFailed ? '#DC2626' : '#000000',
+                        border: `1px solid ${isCompleted ? 'rgba(16, 185, 129, 0.3)' : isFailed ? 'rgba(239, 68, 68, 0.3)' : 'var(--border-subtle)'}`,
                       }}
                     >
                       {item.status}

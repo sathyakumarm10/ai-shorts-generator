@@ -35,7 +35,7 @@ export function Navbar({ onOpenHistory, historyCount = 0, onOpenAuth }) {
                   gap: '4px',
                   fontSize: '0.82rem',
                   padding: '4px 10px',
-                  background: '#1F1F1F',
+                  background: '#F5F5F5',
                   border: '1px solid var(--border-subtle)',
                   borderRadius: '20px',
                   color: 'var(--text-primary)',
