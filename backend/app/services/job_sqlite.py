@@ -119,7 +119,7 @@ def _row_to_job(row: sqlite3.Row) -> JobRecord:
         message=row["message"],
         created_at=_str_to_dt(row["created_at"]) or datetime.now(timezone.utc),
         started_at=_str_to_dt(row["started_at"]),
-        completed_at=_str_to_dt(row["completed_at"]),
+        completed_at=_str_to_dt(row["completed_at"]) or (_str_to_dt(row["started_at"]) or _str_to_dt(row["created_at"]) or datetime.now(timezone.utc) if row["status"] == JobStatus.COMPLETED.value else None),
         error=row["error"],
         result=result,
         source=source,

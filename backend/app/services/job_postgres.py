@@ -121,6 +121,8 @@ def _row_to_job(row: Any) -> JobRecord:
         completed_at = datetime.fromisoformat(completed_at)
     if completed_at and completed_at.tzinfo is None:
         completed_at = completed_at.replace(tzinfo=timezone.utc)
+    if (row.get("status") == JobStatus.COMPLETED.value or row.get("status") == JobStatus.COMPLETED) and completed_at is None:
+        completed_at = started_at or created_at or datetime.now(timezone.utc)
 
     return JobRecord(
         job_id=row["job_id"],

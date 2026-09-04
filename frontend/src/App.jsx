@@ -13,6 +13,7 @@ import { uploadVideo, createJob, getJob, listJobs } from './api/client'
 import { AuthProvider, useAuth } from './context/AuthContext'
 
 const STORAGE_KEY = 'ai_shorts_generator_history_v1'
+const ACTIVE_JOB_KEY = 'ai_shorts_active_job_id'
 
 function getJobState(job) {
   if (!job) return 'idle'
@@ -51,56 +52,81 @@ function MainApp() {
   const { user } = useAuth()
   const pollingRef = useRef(null)
 
-  // Fetch jobs for authenticated user or fallback to localStorage
+  // Load history and restore active job on mount or refresh
   useEffect(() => {
-    async function loadUserJobs() {
+    async function initJobs() {
+      let loadedJobs = []
+
+      // 1. Fetch user-scoped jobs if authenticated
       if (user) {
         try {
           const userJobs = await listJobs()
           if (Array.isArray(userJobs) && userJobs.length > 0) {
+            loadedJobs = userJobs
             setHistory(userJobs)
-            const active = userJobs.find((j) => j.status !== 'completed' && j.status !== 'failed')
-            if (active) {
-              setCurrentJob(active)
-              setJobState(getJobState(active))
-            }
-            return
           }
         } catch {
-          // fallback
+          // Fallback to localStorage
         }
       }
 
+      // 2. Load stored local history
       try {
         const stored = localStorage.getItem(STORAGE_KEY)
-        if (!stored) return
-        const parsedHistory = JSON.parse(stored)
-        if (!Array.isArray(parsedHistory)) return
-        setHistory(parsedHistory)
-
-        const activeJob = [...parsedHistory]
-          .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-          .find((job) => job && job.job_id && job.status !== 'completed' && job.status !== 'failed')
-
-        if (activeJob) {
-          setCurrentJob(activeJob)
-          setJobState(getJobState(activeJob))
+        if (stored) {
+          const parsedHistory = JSON.parse(stored)
+          if (Array.isArray(parsedHistory) && parsedHistory.length > 0) {
+            if (loadedJobs.length === 0) {
+              loadedJobs = parsedHistory
+              setHistory(parsedHistory)
+            }
+          }
         }
       } catch {
         // Ignore parse error
       }
+
+      // 3. Restore persisted active job ID if present
+      const persistedActiveJobId = localStorage.getItem(ACTIVE_JOB_KEY)
+      if (persistedActiveJobId) {
+        try {
+          const fetchedJob = await getJob(persistedActiveJobId)
+          if (fetchedJob && fetchedJob.job_id) {
+            setCurrentJob(fetchedJob)
+            setJobState(getJobState(fetchedJob))
+            saveToHistory(fetchedJob)
+            return
+          }
+        } catch {
+          // Job might no longer exist
+        }
+      }
+
+      // 4. Otherwise check for active in-progress job in loaded jobs
+      if (loadedJobs.length > 0) {
+        const inProgress = [...loadedJobs]
+          .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+          .find((j) => j && j.job_id && j.status !== 'completed' && j.status !== 'failed')
+
+        if (inProgress) {
+          setCurrentJob(inProgress)
+          setJobState(getJobState(inProgress))
+          localStorage.setItem(ACTIVE_JOB_KEY, inProgress.job_id)
+        }
+      }
     }
 
-    loadUserJobs()
+    initJobs()
   }, [user])
 
   // Save history to localStorage
   const saveToHistory = (jobRecord, sourceName) => {
+    if (!jobRecord || !jobRecord.job_id) return
     setHistory((prev) => {
       const existingIdx = prev.findIndex((j) => j.job_id === jobRecord.job_id)
       const updatedItem = {
         ...jobRecord,
-        sourceName: sourceName || prev[existingIdx]?.sourceName || 'Uploaded Video',
+        sourceName: sourceName || prev[existingIdx]?.sourceName || jobRecord.sourceName || 'Video',
       }
 
       let nextList = []
@@ -108,7 +134,7 @@ function MainApp() {
         nextList = [...prev]
         nextList[existingIdx] = updatedItem
       } else {
-        nextList = [updatedItem, ...prev.slice(0, 19)]
+        nextList = [updatedItem, ...prev.slice(0, 29)]
       }
 
       try {
@@ -122,6 +148,7 @@ function MainApp() {
 
   // Handle file selection and automatic server upload
   const handleFileSelected = async (file) => {
+    if (isUploading || isSubmitting) return
     setSelectedFile(file)
     setError(null)
     setIsUploading(true)
@@ -139,26 +166,42 @@ function MainApp() {
   }
 
   const handleClearFile = () => {
+    if (isUploading || isSubmitting) return
     setSelectedFile(null)
     setUploadedData(null)
     setError(null)
   }
 
   const handleReset = () => {
+    if (pollingRef.current) clearInterval(pollingRef.current)
+    localStorage.removeItem(ACTIVE_JOB_KEY)
     setJobState('idle')
     setCurrentJob(null)
     setError(null)
     setSelectedFile(null)
     setUploadedData(null)
     setVideoUrl('')
+    setIsSubmitting(false)
   }
 
   // Handle generation submission
   const handleGenerate = async () => {
-    const videoLocation = sourceType === 'upload' ? uploadedData?.file_path : videoUrl.trim()
-    if (!videoLocation) {
-      setError(sourceType === 'upload' ? 'Please select and upload a valid video file first.' : 'Please enter a valid video URL.')
-      return
+    if (isSubmitting || isUploading) return // Prevent duplicate submissions
+
+    if (sourceType === 'upload') {
+      if (!uploadedData?.file_path) {
+        setError('Please select and upload a valid video file first.')
+        return
+      }
+    } else {
+      if (!videoUrl || !videoUrl.trim()) {
+        setError('Please enter a valid video stream or YouTube URL.')
+        return
+      }
+      if (!/^https?:\/\//i.test(videoUrl.trim())) {
+        setError('Video URL must begin with http:// or https://')
+        return
+      }
     }
 
     setIsSubmitting(true)
@@ -166,16 +209,16 @@ function MainApp() {
 
     const payload = {
       source: {
-        type: sourceType === 'upload' ? 'upload' : 'url',
-        location: videoLocation,
+        type: sourceType === 'upload' ? 'upload' : 'youtube',
+        location: sourceType === 'upload' ? uploadedData.file_path : videoUrl.trim(),
       },
-      clip_duration_seconds: Number(settings.clipDurationSeconds),
-      number_of_clips: Number(settings.numberOfClips),
+      clip_duration_seconds: Number(settings.clipDurationSeconds) || 60,
+      number_of_clips: Math.min(15, Math.max(1, Number(settings.numberOfClips) || 10)),
       include_captions: Boolean(settings.includeCaptions !== false),
       caption_preset: settings.captionPreset || 'default',
       enable_karaoke: Boolean(settings.enableKaraoke !== false),
-      min_clip_duration: Number(settings.minClipDuration),
-      max_clip_duration: Number(settings.maxClipDuration),
+      min_clip_duration: Number(settings.minClipDuration) || 30,
+      max_clip_duration: Number(settings.maxClipDuration) || 120,
       vertical_width: 1080,
       vertical_height: 1920,
     }
@@ -184,6 +227,7 @@ function MainApp() {
       const job = await createJob(payload)
       setCurrentJob(job)
       setJobState('processing')
+      localStorage.setItem(ACTIVE_JOB_KEY, job.job_id)
       saveToHistory(job, selectedFile?.name || (videoUrl ? 'Web Video' : 'Generated Short'))
     } catch (err) {
       setError(err.message || 'Failed to start shorts generation job.')
@@ -213,8 +257,8 @@ function MainApp() {
           setError(latestJob.error || 'Job failed during video processing')
           clearInterval(pollingRef.current)
         }
-      } catch (err) {
-        // Network blip
+      } catch {
+        // Network blip; continue polling
       }
     }
 
@@ -225,21 +269,26 @@ function MainApp() {
     }
   }, [jobState, currentJob?.job_id])
 
-  const handleSelectHistoryJob = (jobItem) => {
-    setCurrentJob(jobItem)
-    if (jobItem.status === 'completed') {
-      setJobState('results')
-    } else if (jobItem.status === 'failed') {
-      setJobState('failed')
-      setError(jobItem.error || 'Job failed')
-    } else {
-      setJobState('processing')
-    }
+  const handleSelectHistoryJob = async (jobItem) => {
+    if (!jobItem || !jobItem.job_id) return
+    localStorage.setItem(ACTIVE_JOB_KEY, jobItem.job_id)
     setIsHistoryOpen(false)
+
+    try {
+      const freshJob = await getJob(jobItem.job_id)
+      setCurrentJob(freshJob)
+      setJobState(getJobState(freshJob))
+      saveToHistory(freshJob)
+    } catch {
+      // Fall back to cached copy
+      setCurrentJob(jobItem)
+      setJobState(getJobState(jobItem))
+    }
   }
 
   const handleClearHistory = () => {
     localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(ACTIVE_JOB_KEY)
     setHistory([])
   }
 
@@ -248,7 +297,6 @@ function MainApp() {
       activeTab={activeTab}
       onSelectTab={(tab) => {
         setActiveTab(tab)
-        // If switching tabs while not actively in results/processing, reset errors
         if (jobState === 'failed') {
           setJobState('idle')
         }
@@ -256,7 +304,7 @@ function MainApp() {
       onOpenAuth={() => setIsAuthOpen(true)}
       historyCount={history.length}
     >
-      {/* Top Navbar for quick actions and legacy compatibility */}
+      {/* Top Navbar */}
       <Navbar
         onOpenHistory={() => setIsHistoryOpen(true)}
         historyCount={history.length}

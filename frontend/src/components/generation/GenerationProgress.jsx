@@ -32,9 +32,21 @@ export function GenerationProgress({ job, onCancel }) {
   const activeStageIndex = PIPELINE_STAGES.findIndex((s) => s.key === currentStatus)
   const effectiveIndex = activeStageIndex === -1 ? 0 : activeStageIndex
 
-  // Determine counts if available
-  const requestedCount = job?.request?.number_of_clips || 10
-  const generatedShorts = job?.result?.generated_shorts?.length || 0
+  // Determine requested, generated, and failed counts from real backend job
+  const requestedCount = job?.number_of_clips || job?.request?.number_of_clips || 10
+  const resultShorts = job?.result?.generated_shorts?.length || 0
+
+  // If in active rendering stages, try to parse current short index from backend progress message
+  let renderedCount = resultShorts
+  if (renderedCount === 0 && message) {
+    const match = message.match(/short #(\d+)\/(\d+)/i)
+    if (match) {
+      renderedCount = Math.max(0, parseInt(match[1], 10) - 1)
+    }
+  }
+
+  const candidatesCount = job?.result?.candidates?.length || 0
+  const failedCount = job?.result ? Math.max(0, candidatesCount - resultShorts) : 0
 
   return (
     <div className="glass-card progress-card" role="region" aria-label="Job Processing Status">
@@ -44,21 +56,25 @@ export function GenerationProgress({ job, onCancel }) {
         <p className="progress-message">{message}</p>
       </div>
 
-      {/* Progress Meta Chips */}
+      {/* Real Progress Metrics Chips */}
       <div className="progress-chips-row">
-        <div className="progress-chip">
-          <span className="chip-label">Target Shorts:</span>
+        <div className="progress-chip" title="Maximum target shorts requested">
+          <span className="chip-label">Requested:</span>
           <span className="chip-val">{requestedCount}</span>
         </div>
-        {generatedShorts > 0 && (
-          <div className="progress-chip">
-            <span className="chip-label">Rendered:</span>
-            <span className="chip-val">{generatedShorts}</span>
+        <div className="progress-chip" title="Shorts successfully rendered so far">
+          <span className="chip-label">Generated:</span>
+          <span className="chip-val">{renderedCount}</span>
+        </div>
+        {failedCount > 0 && (
+          <div className="progress-chip" title="Candidates that could not produce a valid short">
+            <span className="chip-label">Failed:</span>
+            <span className="chip-val" style={{ color: 'var(--status-error)' }}>{failedCount}</span>
           </div>
         )}
         <div className="progress-chip">
-          <span className="chip-label">Status:</span>
-          <span className="chip-val chip-status">{currentStatus}</span>
+          <span className="chip-label">Stage:</span>
+          <span className="chip-val chip-status">{PIPELINE_STAGES[effectiveIndex]?.label || currentStatus}</span>
         </div>
       </div>
 

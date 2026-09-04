@@ -1,9 +1,14 @@
-import React, { useState } from 'react'
-import { Download, Sparkles, Clock, Check, Copy, Flame, Cpu, Subtitles } from 'lucide-react'
+import React, { useState, useRef } from 'react'
+import { Download, Sparkles, Clock, Check, Copy, Flame, Cpu, Subtitles, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react'
 import { getMediaUrl } from '../../api/client'
 
 export function ShortCard({ short }) {
   const [copied, setCopied] = useState(false)
+  const [showSubtitles, setShowSubtitles] = useState(false)
+  const [videoError, setVideoError] = useState(false)
+  const [duration, setDuration] = useState(null)
+  const videoRef = useRef(null)
+
   const videoSrc = getMediaUrl(short.final_file_path || short.vertical_clip_path)
   const candidate = short.candidate || {}
   const score = candidate.score?.overall != null
@@ -13,7 +18,10 @@ export function ShortCard({ short }) {
   const isAI = candidate.source_type === 'ai'
   const title = candidate.title
   const hook = candidate.viral_hook
-  const hasCaptions = Boolean(short.captioned_clip_path || short.caption_track)
+  const hasBurnedCaptions = Boolean(short.captioned_clip_path)
+  const captionTrack = short.caption_track
+  const captionSegments = captionTrack?.segments || []
+  const hasCaptions = Boolean(hasBurnedCaptions || captionSegments.length > 0)
 
   const handleCopyPath = async () => {
     try {
@@ -25,16 +33,51 @@ export function ShortCard({ short }) {
     }
   }
 
+  const effectiveDuration = duration || candidate.duration_seconds
+
   return (
     <article className="short-card" aria-label={`Short #${short.index}`}>
       <div className="short-video-wrapper">
-        <video
-          className="short-video"
-          src={videoSrc}
-          controls
-          preload="metadata"
-          playsInline
-        />
+        {videoError ? (
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '1.5rem',
+              textAlign: 'center',
+              background: '#0D0D0D',
+              color: '#888888',
+              gap: '0.6rem',
+            }}
+          >
+            <AlertCircle size={32} color="#777777" />
+            <span style={{ fontSize: '0.85rem', color: '#E5E5E5', fontWeight: 600 }}>
+              Video preview unavailable
+            </span>
+            <span style={{ fontSize: '0.75rem', color: '#777777' }}>
+              Download below to view the rendered MP4 file.
+            </span>
+          </div>
+        ) : (
+          <video
+            ref={videoRef}
+            className="short-video"
+            src={videoSrc}
+            controls
+            preload="metadata"
+            playsInline
+            onLoadedMetadata={(e) => {
+              if (e.target.duration && !isNaN(e.target.duration)) {
+                setDuration(e.target.duration)
+              }
+            }}
+            onError={() => setVideoError(true)}
+          />
+        )}
         <div className="short-badge">Short #{short.index}</div>
         {score != null && (
           <div className="short-score-badge">
@@ -48,13 +91,12 @@ export function ShortCard({ short }) {
         <div className="short-meta-header">
           <span className="short-duration-text">
             <Clock size={13} />
-            {candidate.start_seconds?.toFixed(1)}s &ndash; {candidate.end_seconds?.toFixed(1)}s ({candidate.duration_seconds?.toFixed(1)}s)
+            {candidate.start_seconds?.toFixed(1)}s &ndash; {candidate.end_seconds?.toFixed(1)}s
+            {effectiveDuration != null && ` (${effectiveDuration.toFixed(1)}s)`}
           </span>
 
           <div className="short-tags-cluster">
-            <span
-              className={`short-source-tag ${isAI ? 'tag-ai' : 'tag-heuristic'}`}
-            >
+            <span className={`short-source-tag ${isAI ? 'tag-ai' : 'tag-heuristic'}`}>
               {isAI ? <Sparkles size={11} /> : <Cpu size={11} />}
               {isAI ? 'AI Pick' : 'Heuristic'}
             </span>
@@ -71,11 +113,9 @@ export function ShortCard({ short }) {
               </span>
             )}
 
-            <span
-              className={`short-caption-tag ${hasCaptions ? 'caption-active' : 'caption-none'}`}
-            >
+            <span className={`short-caption-tag ${hasCaptions ? 'caption-active' : 'caption-none'}`}>
               <Subtitles size={11} />
-              {hasCaptions ? `${short.caption_preset || 'Dynamic'} Captions` : 'No Captions'}
+              {hasBurnedCaptions ? `${short.caption_preset || 'Dynamic'} Captions` : (hasCaptions ? 'Synchronized Track' : 'No Captions')}
             </span>
           </div>
         </div>
@@ -93,10 +133,79 @@ export function ShortCard({ short }) {
           </p>
         )}
 
+        {/* Highlight Transcript Window for this Short */}
         {candidate.text && (
           <p className="short-transcript-snippet" title={candidate.text}>
             &ldquo;{candidate.text}&rdquo;
           </p>
+        )}
+
+        {/* Per-Short Subtitle Track Segments Inspector */}
+        {captionSegments.length > 0 && (
+          <div style={{ marginTop: '0.25rem', marginBottom: '0.5rem' }}>
+            <button
+              type="button"
+              onClick={() => setShowSubtitles(!showSubtitles)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                padding: '0.2rem 0',
+              }}
+            >
+              <Subtitles size={13} />
+              <span>{showSubtitles ? 'Hide Subtitles' : `View Synchronized Subtitles (${captionSegments.length})`}</span>
+              {showSubtitles ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
+
+            {showSubtitles && (
+              <div
+                style={{
+                  maxHeight: '140px',
+                  overflowY: 'auto',
+                  marginTop: '0.4rem',
+                  padding: '0.5rem 0.65rem',
+                  background: '#F8F9FA',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-sm)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.35rem',
+                }}
+              >
+                {captionSegments.map((seg, sIdx) => (
+                  <div
+                    key={sIdx}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      gap: '0.5rem',
+                      fontSize: '0.75rem',
+                      lineHeight: 1.35,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: 'var(--text-muted)',
+                        fontFamily: 'monospace',
+                        flexShrink: 0,
+                        fontSize: '0.7rem',
+                      }}
+                    >
+                      {seg.start_seconds.toFixed(1)}s &ndash; {seg.end_seconds.toFixed(1)}s:
+                    </span>
+                    <span style={{ color: 'var(--text-primary)' }}>&ldquo;{seg.text}&rdquo;</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         <div className="short-actions">
