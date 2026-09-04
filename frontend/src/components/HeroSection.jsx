@@ -20,15 +20,15 @@ export function HeroSection() {
 
         <div className="feature-pills">
           <div className="feature-pill">
-            <Scissors size={14} color="#a855f7" />
+            <Scissors size={14} />
             <span>AI Highlight Detection</span>
           </div>
           <div className="feature-pill">
-            <Smartphone size={14} color="#06b6d4" />
+            <Smartphone size={14} />
             <span>9:16 Vertical Auto-Crop</span>
           </div>
           <div className="feature-pill">
-            <Subtitles size={14} color="#10b981" />
+            <Subtitles size={14} />
             <span>Synced Burned Captions</span>
           </div>
         </div>

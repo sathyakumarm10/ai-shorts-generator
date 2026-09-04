@@ -40,7 +40,7 @@ export function DashboardPage({
       {/* Metrics Row */}
       <section className="metrics-grid" aria-label="Generation Statistics">
         <div className="metric-card">
-          <div className="metric-icon-wrap" style={{ background: 'rgba(99, 102, 241, 0.15)', color: '#818cf8' }}>
+          <div className="metric-icon-wrap">
             <Film size={20} />
           </div>
           <div className="metric-details">
@@ -50,7 +50,7 @@ export function DashboardPage({
         </div>
 
         <div className="metric-card">
-          <div className="metric-icon-wrap" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
+          <div className="metric-icon-wrap">
             <CheckCircle2 size={20} />
           </div>
           <div className="metric-details">
@@ -60,7 +60,7 @@ export function DashboardPage({
         </div>
 
         <div className="metric-card">
-          <div className="metric-icon-wrap" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7' }}>
+          <div className="metric-icon-wrap">
             <Sparkles size={20} />
           </div>
           <div className="metric-details">

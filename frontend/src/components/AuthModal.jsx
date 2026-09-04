@@ -53,7 +53,7 @@ export function AuthModal({ isOpen, onClose }) {
         style={{
           width: '100%',
           maxWidth: '420px',
-          background: 'rgba(20, 20, 35, 0.95)',
+          background: '#141414',
           border: '1px solid var(--border-subtle)',
           borderRadius: 'var(--radius-md)',
           padding: '2rem',
@@ -177,7 +177,7 @@ export function AuthModal({ isOpen, onClose }) {
             style={{
               background: 'transparent',
               border: 'none',
-              color: 'var(--accent-indigo)',
+              color: 'var(--text-primary)',
               fontWeight: 600,
               cursor: 'pointer',
               textDecoration: 'underline',

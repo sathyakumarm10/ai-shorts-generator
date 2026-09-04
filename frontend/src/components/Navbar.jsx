@@ -10,7 +10,7 @@ export function Navbar({ onOpenHistory, historyCount = 0, onOpenAuth }) {
       <div className="container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
         <a href="/" className="nav-brand">
           <div className="brand-icon">
-            <Sparkles size={20} color="white" />
+            <Sparkles size={18} />
           </div>
           <span>AI Shorts Generator</span>
         </a>
@@ -35,10 +35,10 @@ export function Navbar({ onOpenHistory, historyCount = 0, onOpenAuth }) {
                   gap: '4px',
                   fontSize: '0.82rem',
                   padding: '4px 10px',
-                  background: 'rgba(99, 102, 241, 0.15)',
-                  border: '1px solid rgba(99, 102, 241, 0.3)',
+                  background: '#1F1F1F',
+                  border: '1px solid var(--border-subtle)',
                   borderRadius: '20px',
-                  color: '#a5b4fc',
+                  color: 'var(--text-primary)',
                   fontWeight: 500,
                 }}
               >

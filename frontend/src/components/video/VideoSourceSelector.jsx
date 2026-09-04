@@ -51,7 +51,7 @@ export function VideoSourceSelector({
     <div className="glass-card video-source-selector">
       <div className="card-header">
         <h2 className="card-title">
-          <Film size={20} color="#6366f1" />
+          <Film size={20} />
           <span>Source Video</span>
         </h2>
 
@@ -126,7 +126,7 @@ export function VideoSourceSelector({
 
               <div className="preview-meta">
                 <div className="preview-file-info">
-                  <Video size={16} color="var(--accent-primary)" />
+                  <Video size={16} />
                   <span className="preview-filename">{selectedFile.name}</span>
                   <span className="preview-filesize">({formatFileSize(selectedFile.size)})</span>
                 </div>
@@ -150,7 +150,7 @@ export function VideoSourceSelector({
                 </div>
               ) : uploadedData ? (
                 <div className="upload-ready-indicator">
-                  <CheckCircle2 size={15} color="#10b981" />
+                  <CheckCircle2 size={15} />
                   <span>Video ready for processing</span>
                 </div>
               ) : null}

@@ -26,7 +26,7 @@ export function GenerationSettings({
     <div className="glass-card generation-settings-card">
       <div className="card-header">
         <h2 className="card-title">
-          <Sliders size={20} color="#a855f7" />
+          <Sliders size={20} />
           <span>Generation Settings</span>
         </h2>
       </div>
@@ -36,7 +36,7 @@ export function GenerationSettings({
         <div className="setting-item">
           <div className="setting-label-row">
             <span className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <Layers size={15} color="var(--text-secondary)" />
+              <Layers size={15} />
               Number of Shorts
             </span>
             <span className="setting-value">{shortCount} {shortCount === 1 ? 'short' : 'shorts'}</span>
@@ -66,7 +66,7 @@ export function GenerationSettings({
         <div className="setting-item">
           <div className="setting-label-row">
             <span className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <Clock size={15} color="var(--text-secondary)" />
+              <Clock size={15} />
               Target Duration
             </span>
             <span className="setting-value">{settings.clipDurationSeconds || 60}s</span>
@@ -89,7 +89,7 @@ export function GenerationSettings({
         <div className="toggle-row">
           <div>
             <div className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <Subtitles size={16} color="var(--accent-emerald)" />
+              <Subtitles size={16} />
               <span>Generate Subtitles</span>
             </div>
             <div className="setting-helper">Create synchronized readable subtitles formatted for 9:16 mobile display.</div>
@@ -112,7 +112,7 @@ export function GenerationSettings({
           <div className="setting-item" style={{ marginTop: '0.5rem' }}>
             <div className="setting-label-row">
               <span className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <Sparkles size={15} color="#06b6d4" />
+                <Sparkles size={15} />
                 Subtitle Style
               </span>
             </div>

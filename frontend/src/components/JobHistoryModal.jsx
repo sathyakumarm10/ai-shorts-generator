@@ -35,14 +35,14 @@ export function JobHistoryModal({ isOpen, onClose, history, onSelectJob, onClear
                   key={item.job_id}
                   style={{
                     padding: '1rem',
-                    background: 'rgba(255, 255, 255, 0.03)',
+                    background: 'var(--bg-card)',
                     border: '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--radius-md)',
+                    borderRadius: 'var(--radius-sm)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     cursor: 'pointer',
-                    transition: 'all 0.2s ease',
+                    transition: 'all 0.15s ease',
                   }}
                   onClick={() => {
                     onSelectJob(item)
@@ -64,11 +64,12 @@ export function JobHistoryModal({ isOpen, onClose, history, onSelectJob, onClear
                       style={{
                         padding: '0.25rem 0.6rem',
                         borderRadius: 'var(--radius-sm)',
-                        fontSize: '0.75rem',
-                        fontWeight: 700,
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
                         textTransform: 'uppercase',
-                        background: isCompleted ? 'rgba(16, 185, 129, 0.15)' : isFailed ? 'rgba(244, 63, 94, 0.15)' : 'rgba(99, 102, 241, 0.15)',
-                        color: isCompleted ? '#10b981' : isFailed ? '#f43f5e' : '#818cf8',
+                        background: isCompleted ? 'rgba(16, 185, 129, 0.12)' : isFailed ? 'rgba(239, 68, 68, 0.12)' : 'rgba(255, 255, 255, 0.08)',
+                        color: isCompleted ? '#10B981' : isFailed ? '#EF4444' : '#FFFFFF',
+                        border: `1px solid ${isCompleted ? 'rgba(16, 185, 129, 0.25)' : isFailed ? 'rgba(239, 68, 68, 0.25)' : '#333333'}`,
                       }}
                     >
                       {item.status}

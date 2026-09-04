@@ -117,7 +117,7 @@ export function ShortCard({ short }) {
             title="Copy local file path"
             aria-label="Copy local file path"
           >
-            {copied ? <Check size={15} color="#10b981" /> : <Copy size={15} />}
+            {copied ? <Check size={15} /> : <Copy size={15} />}
           </button>
         </div>
       </div>
