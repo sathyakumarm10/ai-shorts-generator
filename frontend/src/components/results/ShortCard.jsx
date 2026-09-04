@@ -1,19 +1,35 @@
 import React, { useState, useRef } from 'react'
-import { Download, Sparkles, Clock, Check, Copy, Flame, Cpu, Subtitles, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react'
+import {
+  Download,
+  Sparkles,
+  Clock,
+  Check,
+  Copy,
+  Flame,
+  Cpu,
+  Subtitles,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle,
+  Maximize2,
+} from 'lucide-react'
 import { getMediaUrl } from '../../api/client'
 
-export function ShortCard({ short }) {
+export function ShortCard({ short, onSelect, isSelected = false }) {
   const [copied, setCopied] = useState(false)
   const [showSubtitles, setShowSubtitles] = useState(false)
   const [videoError, setVideoError] = useState(false)
   const [duration, setDuration] = useState(null)
   const videoRef = useRef(null)
 
-  const videoSrc = getMediaUrl(short.final_file_path || short.vertical_clip_path)
+  const isFailed = short.status === 'failed'
+  const rawPath = short.final_file_path || short.vertical_clip_path
+  const videoSrc = rawPath ? getMediaUrl(rawPath) : ''
   const candidate = short.candidate || {}
-  const score = candidate.score?.overall != null
-    ? Math.round(candidate.score.overall * 100)
-    : null
+  const score =
+    candidate.score?.overall != null
+      ? Math.round(candidate.score.overall * 100)
+      : null
 
   const isAI = candidate.source_type === 'ai'
   const title = candidate.title
@@ -23,9 +39,10 @@ export function ShortCard({ short }) {
   const captionSegments = captionTrack?.segments || []
   const hasCaptions = Boolean(hasBurnedCaptions || captionSegments.length > 0)
 
-  const handleCopyPath = async () => {
+  const handleCopyPath = async (e) => {
+    e.stopPropagation()
     try {
-      await navigator.clipboard.writeText(short.final_file_path || '')
+      await navigator.clipboard.writeText(rawPath || '')
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
@@ -36,9 +53,12 @@ export function ShortCard({ short }) {
   const effectiveDuration = duration || candidate.duration_seconds
 
   return (
-    <article className="short-card" aria-label={`Short #${short.index}`}>
+    <article
+      className={`short-card ${isSelected ? 'short-card-active' : ''} ${isFailed ? 'short-card-failed' : ''}`}
+      aria-label={`Short #${short.index}`}
+    >
       <div className="short-video-wrapper">
-        {videoError ? (
+        {isFailed || videoError || !videoSrc ? (
           <div
             style={{
               width: '100%',
@@ -56,10 +76,10 @@ export function ShortCard({ short }) {
           >
             <AlertCircle size={32} color="#777777" />
             <span style={{ fontSize: '0.85rem', color: '#E5E5E5', fontWeight: 600 }}>
-              Video preview unavailable
+              {isFailed ? 'Short Generation Failed' : 'Video preview unavailable'}
             </span>
             <span style={{ fontSize: '0.75rem', color: '#777777' }}>
-              Download below to view the rendered MP4 file.
+              {short.error_message || 'Download below to view the rendered MP4 file.'}
             </span>
           </div>
         ) : (
@@ -85,13 +105,19 @@ export function ShortCard({ short }) {
             {score}% Viral Score
           </div>
         )}
+
+        {isFailed && (
+          <div className="short-failed-badge">
+            Failed
+          </div>
+        )}
       </div>
 
       <div className="short-details">
         <div className="short-meta-header">
           <span className="short-duration-text">
             <Clock size={13} />
-            {candidate.start_seconds?.toFixed(1)}s &ndash; {candidate.end_seconds?.toFixed(1)}s
+            {candidate.start_seconds != null ? `${candidate.start_seconds.toFixed(1)}s` : '0.0s'} &ndash; {candidate.end_seconds != null ? `${candidate.end_seconds.toFixed(1)}s` : ''}
             {effectiveDuration != null && ` (${effectiveDuration.toFixed(1)}s)`}
           </span>
 
@@ -198,7 +224,7 @@ export function ShortCard({ short }) {
                         fontSize: '0.7rem',
                       }}
                     >
-                      {seg.start_seconds.toFixed(1)}s &ndash; {seg.end_seconds.toFixed(1)}s:
+                      {Number(seg.start_seconds).toFixed(1)}s &ndash; {Number(seg.end_seconds).toFixed(1)}s:
                     </span>
                     <span style={{ color: 'var(--text-primary)' }}>&ldquo;{seg.text}&rdquo;</span>
                   </div>
@@ -209,25 +235,41 @@ export function ShortCard({ short }) {
         )}
 
         <div className="short-actions">
-          <a
-            href={videoSrc}
-            download={`short_${short.index}.mp4`}
-            className="btn-download"
-            aria-label={`Download Short #${short.index}`}
-          >
-            <Download size={15} />
-            <span>Download Short</span>
-          </a>
+          {onSelect && (
+            <button
+              type="button"
+              className={`btn-workspace-select ${isSelected ? 'btn-workspace-active' : ''}`}
+              onClick={() => onSelect(short)}
+              title="Open and edit in workspace"
+            >
+              <Maximize2 size={14} />
+              <span>{isSelected ? 'Active Short' : 'Open in Workspace'}</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleCopyPath}
-            title="Copy local file path"
-            aria-label="Copy local file path"
-          >
-            {copied ? <Check size={15} /> : <Copy size={15} />}
-          </button>
+          {videoSrc && !isFailed && (
+            <a
+              href={videoSrc}
+              download={`short_${short.index}.mp4`}
+              className="btn-download"
+              aria-label={`Download Short #${short.index}`}
+            >
+              <Download size={15} />
+              <span>Download</span>
+            </a>
+          )}
+
+          {rawPath && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleCopyPath}
+              title="Copy local file path"
+              aria-label="Copy local file path"
+            >
+              {copied ? <Check size={15} /> : <Copy size={15} />}
+            </button>
+          )}
         </div>
       </div>
     </article>
