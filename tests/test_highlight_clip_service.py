@@ -62,7 +62,7 @@ class MockVideoClipService(VideoClipService):
         self.return_empty_file = return_empty_file
         self.calls: list[tuple[object, VideoClipRequest]] = []
 
-    def create_clip(self, video, clip_request, metadata=None):
+    def create_clip(self, video, clip_request, metadata=None, output_filename=None):
         self.calls.append((video, clip_request))
         if self.should_fail:
             raise VideoClipError("Mock FFmpeg rendering error")

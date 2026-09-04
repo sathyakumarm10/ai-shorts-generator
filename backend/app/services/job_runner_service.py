@@ -141,10 +141,21 @@ class JobRunnerService:
             except Exception:
                 pass
 
+            # --- Normalize all artifact paths to relative paths before persistence ---
+            try:
+                result = self.media_storage.normalize_result_paths(result)
+            except Exception:
+                pass
+
             duration_ms = (time.perf_counter() - t_start) * 1000.0
             default_metrics_collector.record_stage_duration("e2e_pipeline", duration_ms)
             default_metrics_collector.record_job_event("completed")
-            log_audit_event("job.completed", "success", resource_id=job_id, details={"duration_ms": round(duration_ms, 2)})
+            log_audit_event(
+                "job.completed",
+                "success",
+                resource_id=job_id,
+                details={"duration_ms": round(duration_ms, 2)},
+            )
 
             self.job_service.complete_job(job_id=job_id, result=result)
 

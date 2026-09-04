@@ -41,6 +41,7 @@ class VideoClipService:
         video: IngestedVideo | str | Path,
         clip_request: VideoClipRequest,
         metadata: Optional[VideoMetadata] = None,
+        output_filename: Optional[str] = None,
     ) -> IngestedVideo:
         """Cut a time segment from an ingested video using FFmpeg.
 
@@ -48,6 +49,7 @@ class VideoClipService:
             video: An IngestedVideo model or local file path to the source video.
             clip_request: VideoClipRequest specifying start_seconds and duration_seconds.
             metadata: Optional VideoMetadata for source duration validation.
+            output_filename: Optional custom output filename.
 
         Returns:
             IngestedVideo: Contains the local file path to the newly generated MP4 clip.
@@ -76,9 +78,12 @@ class VideoClipService:
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate unique, collision-resistant output filename inside output_dir
-        unique_clip_id = uuid4().hex
-        output_path = self.output_dir / f"clip_{unique_clip_id}.mp4"
+        # Generate output filename inside output_dir
+        if output_filename:
+            output_path = self.output_dir / output_filename
+        else:
+            unique_clip_id = uuid4().hex
+            output_path = self.output_dir / f"clip_{unique_clip_id}.mp4"
 
         # Check for executable
         executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable

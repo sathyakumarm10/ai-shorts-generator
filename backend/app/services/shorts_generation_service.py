@@ -71,7 +71,7 @@ class ShortsGenerationService:
         self,
         source: VideoSource | ShortsGenerationRequest,
         clip_duration_seconds: float = 60.0,
-        number_of_clips: int = 3,
+        number_of_clips: int = 10,
         include_captions: bool = True,
         min_clip_duration: float = 30.0,
         max_clip_duration: float = 120.0,
@@ -94,7 +94,7 @@ class ShortsGenerationService:
         Args:
             source: VideoSource or validated ShortsGenerationRequest.
             clip_duration_seconds: Desired target duration of each short.
-            number_of_clips: Number of top highlight candidates to render.
+            number_of_clips: Number of top highlight candidates to render (default 10, max 15).
             include_captions: Whether to burn styled captions into the video.
             min_clip_duration: Minimum allowed duration for a candidate.
             max_clip_duration: Maximum allowed duration for a candidate.
@@ -209,8 +209,11 @@ class ShortsGenerationService:
                 generated_shorts=[],
             )
 
+        # Cap candidates to requested number_of_clips
+        candidates = candidates[:req.number_of_clips]
+
         # 5. Render candidate raw clips
-        report_progress(JobStatus.GENERATING_CLIPS, 65.0, f"Rendering {min(len(candidates), req.number_of_clips)} candidate clips")
+        report_progress(JobStatus.GENERATING_CLIPS, 60.0, f"Rendering {len(candidates)} candidate clips")
         try:
             rendered_clips = self.highlight_clip_service.generate_clips(
                 video=ingested_video,
@@ -222,65 +225,77 @@ class ShortsGenerationService:
 
         # 6 & 7. Convert each rendered clip to vertical 9:16 and optionally burn relative captions
         generated_shorts: List[GeneratedShort] = []
+        failed_count = 0
+        total_clips = len(rendered_clips)
+
         for idx, clip in enumerate(rendered_clips, start=1):
             cand = clip.candidate
+            # Smooth progress calculation across 60.0% -> 95.0%
+            progress_pct = 60.0 + (35.0 * (idx / max(1, total_clips)))
 
-            # Convert to vertical 9:16
-            report_progress(JobStatus.CONVERTING_VERTICAL, 80.0, f"Converting short #{idx} to 9:16 vertical format (smart framing)")
+            # Convert to vertical 9:16 with fault tolerance
+            report_progress(JobStatus.CONVERTING_VERTICAL, progress_pct, f"Converting short #{idx}/{total_clips} to 9:16 vertical format")
             try:
                 vert_req = VerticalVideoRequest(width=req.vertical_width, height=req.vertical_height)
-                vertical_video = self.vertical_video_service.convert_to_vertical(clip.file_path, vert_req)
-            except (VerticalVideoError, Exception) as exc:
-                raise ShortsGenerationError(
-                    f"Vertical 9:16 conversion failed for short #{idx} ({cand.start_seconds}s-{cand.end_seconds}s): {exc}"
-                ) from exc
+                vert_filename = f"short_{idx:03d}.mp4"
+                vertical_video = self.vertical_video_service.convert_to_vertical(
+                    clip.file_path,
+                    vert_req,
+                    output_filename=vert_filename,
+                )
+            except Exception as exc:
+                # Capture individual rendering failure gracefully, log, and continue processing remaining candidates
+                failed_count += 1
+                continue
 
             framing_type = vertical_video.framing_type or FramingType.CENTER_CROP
             captioned_clip_path: Optional[str] = None
             final_path = vertical_video.file_path
 
             # Optional: Extract relative captions for this clip's time window and burn them
+            short_caption_track: Optional[CaptionTrack] = None
             if req.include_captions:
-                report_progress(JobStatus.ADDING_CAPTIONS, 90.0, f"Burning styled captions into short #{idx}")
-                relative_segments: List[CaptionSegment] = []
-                c_start = cand.start_seconds
-                c_end = cand.end_seconds
-
-                for seg in transcript.segments:
-                    # Check if transcript segment overlaps candidate window
-                    if seg.end_seconds > c_start and seg.start_seconds < c_end:
-                        # Shift timestamp to local clip time coordinate [0.0, duration]
-                        rel_start = max(0.0, round(seg.start_seconds - c_start, 3))
-                        rel_end = min(cand.duration_seconds, round(seg.end_seconds - c_start, 3))
-                        clean_text = seg.text.strip()
-                        if rel_end > rel_start and clean_text:
-                            relative_segments.append(
-                                CaptionSegment(
-                                    start_seconds=rel_start,
-                                    end_seconds=rel_end,
-                                    text=clean_text,
-                                )
-                            )
-
+                report_progress(
+                    JobStatus.ADDING_CAPTIONS,
+                    progress_pct,
+                    f"Burning styled captions into short #{idx}/{total_clips}",
+                )
                 try:
-                    caption_track = CaptionTrack(segments=relative_segments)
+                    res = self.caption_service.extract_short_captions(
+                        transcript=transcript,
+                        start_seconds=cand.start_seconds,
+                        end_seconds=cand.end_seconds,
+                        max_chars_per_line=38,
+                    )
+                    if isinstance(res, CaptionTrack):
+                        short_caption_track = res
+                    else:
+                        short_caption_track = CaptionService().extract_short_captions(
+                            transcript=transcript,
+                            start_seconds=cand.start_seconds,
+                            end_seconds=cand.end_seconds,
+                            max_chars_per_line=38,
+                        )
+                    cap_filename = f"short_{idx:03d}.mp4"
                     captioned_video = self.caption_burn_service.burn_captions(
                         vertical_video.file_path,
-                        caption_track,
+                        short_caption_track,
                         preset=req.caption_preset,
                         enable_karaoke=getattr(req, "enable_karaoke", True),
                         karaoke_active_color=getattr(req, "karaoke_active_color", None),
+                        output_filename=cap_filename,
                     )
                     captioned_clip_path = captioned_video.file_path
                     final_path = captioned_video.file_path
-                except (CaptionServiceError, CaptionBurnError, Exception) as exc:
-                    # Gracefully fall back to non-captioned vertical video so job completes
+                except (CaptionServiceError, CaptionBurnError, Exception):
+                    # Gracefully fall back to non-captioned vertical video so short completes
                     captioned_clip_path = None
                     final_path = vertical_video.file_path
 
+            short_index = len(generated_shorts) + 1
             generated_shorts.append(
                 GeneratedShort(
-                    index=idx,
+                    index=short_index,
                     candidate=cand,
                     source_clip_path=clip.file_path,
                     vertical_clip_path=vertical_video.file_path,
@@ -288,11 +303,27 @@ class ShortsGenerationService:
                     final_file_path=final_path,
                     framing_type=framing_type,
                     caption_preset=req.caption_preset if captioned_clip_path else None,
-                    is_karaoke=bool(captioned_clip_path and getattr(req, "enable_karaoke", True)),
+                    is_karaoke=bool(
+                        captioned_clip_path and getattr(req, "enable_karaoke", True)
+                    ),
+                    caption_track=short_caption_track,
                 )
             )
 
-        report_progress(JobStatus.ADDING_CAPTIONS, 95.0, f"Finalizing {len(generated_shorts)} shorts")
+        if not generated_shorts and total_clips > 0:
+            raise ShortsGenerationError("All candidate short rendering attempts failed.")
+
+        try:
+            from app.services.observability import default_metrics_collector
+            default_metrics_collector.record_shorts_metrics(
+                requested=req.number_of_clips,
+                generated=len(generated_shorts),
+                failed=failed_count,
+            )
+        except Exception:
+            pass
+
+        report_progress(JobStatus.ADDING_CAPTIONS, 95.0, f"Finalizing {len(generated_shorts)} generated shorts")
         return ShortsGenerationResult(
             source_video=ingested_video,
             metadata=metadata,

@@ -29,7 +29,7 @@ class HighlightClipService:
         self,
         video: IngestedVideo | str | Path,
         candidates: List[HighlightCandidate],
-        max_clips: int = 5,
+        max_clips: int = 10,
     ) -> List[GeneratedHighlightClip]:
         """Generate rendered MP4 video clips for the top ranked highlight candidates.
 
@@ -86,7 +86,7 @@ class HighlightClipService:
         selected_candidates = candidates[:max_clips_int]
         generated_clips: List[GeneratedHighlightClip] = []
 
-        for candidate in selected_candidates:
+        for clip_idx, candidate in enumerate(selected_candidates, start=1):
             # Construct VideoClipRequest without modifying candidate values
             try:
                 clip_request = VideoClipRequest(
@@ -98,9 +98,10 @@ class HighlightClipService:
                     f"Failed to construct VideoClipRequest from candidate ({candidate.start_seconds}s - {candidate.end_seconds}s): {exc}"
                 ) from exc
 
-            # Render clip via existing VideoClipService
+            # Render clip via existing VideoClipService with index-based naming
             try:
-                ingested_clip = self.video_clip_service.create_clip(video, clip_request)
+                custom_filename = f"clip_{clip_idx:03d}.mp4"
+                ingested_clip = self.video_clip_service.create_clip(video, clip_request, output_filename=custom_filename)
             except VideoClipError as exc:
                 raise HighlightClipError(f"Video clip generation failed for candidate: {exc}") from exc
             except Exception as exc:

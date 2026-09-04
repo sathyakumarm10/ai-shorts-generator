@@ -252,8 +252,21 @@ class TestCandidateGeneration:
         for i in range(len(candidates)):
             for j in range(i + 1, len(candidates)):
                 c1, c2 = candidates[i], candidates[j]
-                # Ensure no temporal overlap
-                assert c1.end_seconds <= c2.start_seconds + 1e-4 or c1.start_seconds >= c2.end_seconds - 1e-4
+                # Ensure smart deduplication contract: IoU <= 0.35 and start distance >= 10s
+                intersection = max(
+                    0.0,
+                    min(c1.end_seconds, c2.end_seconds)
+                    - max(c1.start_seconds, c2.start_seconds),
+                )
+                union = max(
+                    1e-6,
+                    max(c1.end_seconds, c2.end_seconds)
+                    - min(c1.start_seconds, c2.start_seconds),
+                )
+                iou = intersection / union
+                start_dist = abs(c1.start_seconds - c2.start_seconds)
+                assert iou <= 0.35 + 1e-4, f"IoU {iou} exceeded 0.35"
+                assert start_dist >= 10.0 - 1e-4, f"Start distance {start_dist} below 10s"
 
     def test_short_transcript_less_than_min_duration_fallback(self, scoring_service: HighlightScoringService):
         # Total transcript duration is 15s (less than min_duration 30s)

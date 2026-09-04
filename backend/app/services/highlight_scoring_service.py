@@ -311,16 +311,29 @@ class HighlightScoringService:
         if allow_overlap:
             return raw_candidates
 
-        # Deduplicate overlapping candidate windows greedily based on highest ranking score
+        # Deduplicate candidates greedily based on score while avoiding excessive temporal overlap
         selected_candidates: List[HighlightCandidate] = []
         for candidate in raw_candidates:
-            overlap = False
+            excessive_overlap = False
             for selected in selected_candidates:
-                # Check for temporal overlap between candidate and already selected candidate
-                if not (candidate.end_seconds <= selected.start_seconds + 1e-4 or candidate.start_seconds >= selected.end_seconds - 1e-4):
-                    overlap = True
+                # Calculate Intersection over Union (IoU)
+                inter_start = max(candidate.start_seconds, selected.start_seconds)
+                inter_end = min(candidate.end_seconds, selected.end_seconds)
+                intersection = max(0.0, inter_end - inter_start)
+
+                union_start = min(candidate.start_seconds, selected.start_seconds)
+                union_end = max(candidate.end_seconds, selected.end_seconds)
+                union = max(1e-6, union_end - union_start)
+
+                iou = intersection / union
+                start_distance = abs(candidate.start_seconds - selected.start_seconds)
+
+                # Reject if IoU > 0.35 or start timestamps are less than 10 seconds apart
+                if iou > 0.35 or start_distance < 10.0:
+                    excessive_overlap = True
                     break
-            if not overlap:
+
+            if not excessive_overlap:
                 selected_candidates.append(candidate)
 
         return selected_candidates

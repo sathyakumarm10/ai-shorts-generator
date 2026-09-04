@@ -130,3 +130,110 @@ class CaptionService:
             raise CaptionServiceError(f"SRT file was not created at expected path: {dest_path}")
 
         return dest_path
+
+    def extract_short_captions(
+        self,
+        transcript: TimestampedTranscript,
+        start_seconds: float,
+        end_seconds: float,
+        max_chars_per_line: int = 38,
+    ) -> CaptionTrack:
+        """Extract, re-base, and format caption segments for a specific Short.
+
+        Args:
+            transcript: Source video timestamped transcript.
+            start_seconds: Clip start boundary in source seconds.
+            end_seconds: Clip end boundary in source seconds.
+            max_chars_per_line: Max characters per line for 9:16 readability.
+
+        Returns:
+            CaptionTrack: Synchronized, non-overlapping track for the Short.
+        """
+        if not isinstance(transcript, TimestampedTranscript):
+            raise CaptionServiceError(
+                f"Expected TimestampedTranscript, got {type(transcript).__name__}"
+            )
+
+        s_start = max(0.0, float(start_seconds))
+        s_end = float(end_seconds)
+        duration = s_end - s_start
+        if duration <= 0.05 or not transcript.segments:
+            return CaptionTrack(segments=[])
+
+        raw_segments = []
+        for seg in transcript.segments:
+            if not isinstance(seg, TranscriptSegment):
+                continue
+            if seg.end_seconds <= s_start or seg.start_seconds >= s_end:
+                continue
+
+            clean_text = seg.text.strip()
+            if not clean_text:
+                continue
+
+            rel_start = max(0.0, seg.start_seconds - s_start)
+            rel_end = min(duration, seg.end_seconds - s_start)
+            if rel_end <= rel_start + 0.01:
+                continue
+
+            raw_segments.append((rel_start, rel_end, clean_text))
+
+        # Split long lines for vertical 9:16 screen readability
+        split_segments = []
+        for r_start, r_end, text in raw_segments:
+            if len(text) <= max_chars_per_line:
+                split_segments.append((r_start, r_end, text))
+                continue
+
+            words = text.split()
+            chunks: List[str] = []
+            curr: List[str] = []
+            curr_len = 0
+            for w in words:
+                extra = 1 if curr_len > 0 else 0
+                if curr_len + len(w) + extra <= max_chars_per_line:
+                    curr.append(w)
+                    curr_len += len(w) + extra
+                else:
+                    if curr:
+                        chunks.append(" ".join(curr))
+                    curr = [w]
+                    curr_len = len(w)
+            if curr:
+                chunks.append(" ".join(curr))
+
+            if not chunks:
+                continue
+
+            seg_dur = r_end - r_start
+            total_chars = max(1, sum(len(c) for c in chunks))
+            sub_start = r_start
+            for idx, chunk in enumerate(chunks):
+                chunk_dur = seg_dur * (len(chunk) / total_chars)
+                chunk_end = sub_start + chunk_dur
+                if idx == len(chunks) - 1:
+                    chunk_end = r_end
+                if chunk_end > sub_start:
+                    split_segments.append((sub_start, chunk_end, chunk))
+                sub_start = chunk_end
+
+        final_segments: List[CaptionSegment] = []
+        last_end = 0.0
+        for cand_start, cand_end, text in split_segments:
+            adj_start = max(last_end, cand_start)
+            adj_end = max(adj_start + 0.05, cand_end)
+            if adj_end > duration:
+                adj_end = duration
+            if adj_end <= adj_start + 0.02:
+                continue
+
+            final_segments.append(
+                CaptionSegment(
+                    start_seconds=round(adj_start, 3),
+                    end_seconds=round(adj_end, 3),
+                    text=text,
+                )
+            )
+            last_end = round(adj_end, 3)
+
+        return CaptionTrack(segments=final_segments)

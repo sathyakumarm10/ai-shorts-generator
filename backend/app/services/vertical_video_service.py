@@ -49,6 +49,7 @@ class VerticalVideoService:
         video: IngestedVideo | str | Path,
         request: Optional[VerticalVideoRequest] = None,
         use_smart_framing: Optional[bool] = None,
+        output_filename: Optional[str] = None,
     ) -> IngestedVideo:
         """Convert a video file into a 9:16 vertical MP4 video using scale and smart or center-crop.
 
@@ -56,6 +57,7 @@ class VerticalVideoService:
             video: An IngestedVideo model or local file path to the source video.
             request: Optional VerticalVideoRequest specifying target width and height (defaults to 1080x1920).
             use_smart_framing: Optional flag overriding whether to attempt dynamic smart speaker framing.
+            output_filename: Optional custom output filename.
 
         Returns:
             IngestedVideo: Contains file_path and framing_type for the vertical MP4 video.
@@ -94,9 +96,12 @@ class VerticalVideoService:
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate unique, collision-resistant output filename inside output_dir
-        unique_id = uuid4().hex
-        output_path = self.output_dir / f"vertical_{unique_id}.mp4"
+        # Generate output filename inside output_dir
+        if output_filename:
+            output_path = self.output_dir / output_filename
+        else:
+            unique_id = uuid4().hex
+            output_path = self.output_dir / f"vertical_{unique_id}.mp4"
 
         # Check for FFmpeg executable
         executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable

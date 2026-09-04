@@ -159,9 +159,9 @@ def test_number_of_clips_minimum_boundary_accepted():
 
 
 def test_number_of_clips_maximum_boundary_accepted():
-    response = client.post("/api/jobs", json=_payload(number_of_clips=20))
+    response = client.post("/api/jobs", json=_payload(number_of_clips=15))
     assert response.status_code == 200
-    assert response.json()["number_of_clips"] == 20
+    assert response.json()["number_of_clips"] == 15
 
 
 def test_number_of_clips_below_minimum_rejected():
@@ -170,7 +170,7 @@ def test_number_of_clips_below_minimum_rejected():
 
 
 def test_number_of_clips_above_maximum_rejected():
-    response = client.post("/api/jobs", json=_payload(number_of_clips=21))
+    response = client.post("/api/jobs", json=_payload(number_of_clips=16))
     assert response.status_code == 422
 
 
@@ -197,7 +197,7 @@ def test_missing_clip_duration_rejected():
     assert response.status_code == 422
 
 
-def test_missing_number_of_clips_rejected():
+def test_missing_number_of_clips_uses_default():
     payload = {
         "source": {
             "type": "youtube",
@@ -206,7 +206,8 @@ def test_missing_number_of_clips_rejected():
         "clip_duration": 60,
     }
     response = client.post("/api/jobs", json=payload)
-    assert response.status_code == 422
+    assert response.status_code == 200
+    assert response.json()["number_of_clips"] == 10
 
 
 def test_invalid_source_type_rejected():

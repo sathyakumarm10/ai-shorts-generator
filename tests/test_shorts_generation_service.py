@@ -60,7 +60,7 @@ class TestShortsGenerationModels:
         req = ShortsGenerationRequest(source=source)
 
         assert req.clip_duration_seconds == 60.0
-        assert req.number_of_clips == 3
+        assert req.number_of_clips == 10
         assert req.min_clip_duration == 30.0
         assert req.max_clip_duration == 120.0
         assert req.vertical_width == 1080

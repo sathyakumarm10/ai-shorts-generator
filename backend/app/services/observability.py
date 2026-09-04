@@ -228,6 +228,11 @@ class MetricsCollector:
         # Audit events count
         self._audit_events_count = 0
 
+        # Shorts counts
+        self._shorts_requested = 0
+        self._shorts_generated = 0
+        self._shorts_failed = 0
+
     def record_http_request(
         self,
         method: str,
@@ -330,6 +335,13 @@ class MetricsCollector:
         with self._lock:
             self._audit_events_count += 1
 
+    def record_shorts_metrics(self, requested: int, generated: int, failed: int) -> None:
+        """Record requested, successfully generated, and failed short counts."""
+        with self._lock:
+            self._shorts_requested += requested
+            self._shorts_generated += generated
+            self._shorts_failed += failed
+
     def get_system_resource_metrics(self) -> Dict[str, Any]:
         """Collect current process runtime memory and system metrics."""
         memory_info: Dict[str, Any] = {"rss_bytes": 0, "rss_mb": 0.0}
@@ -402,6 +414,11 @@ class MetricsCollector:
                         "completed": self._jobs_completed,
                         "failed": self._jobs_failed,
                         "processing": self._jobs_processing,
+                    },
+                    "shorts": {
+                        "requested": self._shorts_requested,
+                        "generated": self._shorts_generated,
+                        "failed": self._shorts_failed,
                     },
                 },
                 "storage": {

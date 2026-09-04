@@ -58,6 +58,7 @@ class CaptionBurnService:
         preset: Optional[CaptionPreset] = None,
         enable_karaoke: bool = False,
         karaoke_active_color: Optional[str] = None,
+        output_filename: Optional[str] = None,
     ) -> IngestedVideo:
         """Burn styled or animated karaoke captions from a CaptionTrack into video using FFmpeg.
 
@@ -68,6 +69,7 @@ class CaptionBurnService:
             preset: Optional CaptionPreset to apply custom styling and word chunking.
             enable_karaoke: Whether to render animated ASS karaoke subtitles.
             karaoke_active_color: Optional custom active highlight color in ASS hex.
+            output_filename: Optional custom output filename.
 
         Returns:
             IngestedVideo: Contains file path to the newly rendered captioned MP4.
@@ -98,8 +100,11 @@ class CaptionBurnService:
         dest_dir = Path(output_dir) if output_dir is not None else self.output_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        unique_id = uuid4().hex
-        output_path = dest_dir / f"captioned_{unique_id}.mp4"
+        if output_filename:
+            output_path = dest_dir / output_filename
+        else:
+            unique_id = uuid4().hex
+            output_path = dest_dir / f"captioned_{unique_id}.mp4"
         executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable
 
         target_preset = preset or CaptionPreset.DEFAULT

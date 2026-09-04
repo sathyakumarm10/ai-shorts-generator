@@ -11,7 +11,15 @@ from enum import Enum
 import re
 from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr, Field, HttpUrl, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    HttpUrl,
+    TypeAdapter,
+    model_validator,
+)
 
 
 class UserRole(str, Enum):
@@ -483,7 +491,7 @@ class ShortsGenerationRequest(BaseModel):
 
     source: VideoSource = Field(..., description="Source video to ingest and process.")
     clip_duration_seconds: float = Field(default=60.0, gt=0.0, description="Target duration of each short in seconds.")
-    number_of_clips: int = Field(default=3, gt=0, description="Maximum number of candidate shorts to generate.")
+    number_of_clips: int = Field(default=10, gt=0, description="Maximum number of candidate shorts to generate (1-15).")
     min_clip_duration: float = Field(default=30.0, gt=0.0, description="Minimum allowed clip duration in seconds.")
     max_clip_duration: float = Field(default=120.0, gt=0.0, description="Maximum allowed clip duration in seconds.")
     vertical_width: int = Field(default=1080, gt=0, description="Target vertical video width in pixels.")
@@ -525,8 +533,8 @@ class ShortsGenerationRequest(BaseModel):
                 f"clip_duration_seconds ({self.clip_duration_seconds}s) must be between "
                 f"min_clip_duration ({self.min_clip_duration}s) and max_clip_duration ({self.max_clip_duration}s)"
             )
-        if self.number_of_clips < 1:
-            raise ValueError("number_of_clips must be at least 1")
+        if self.number_of_clips < 1 or self.number_of_clips > 15:
+            raise ValueError(f"number_of_clips must be between 1 and 15 inclusive, got: {self.number_of_clips}")
 
         ratio = self.vertical_width / self.vertical_height
         target_ratio = 9.0 / 16.0
@@ -547,6 +555,8 @@ class FramingType(str, Enum):
 class GeneratedShort(BaseModel):
     """Represents a fully generated Short video artifact through the rendering pipeline."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     index: int = Field(..., ge=1, description="1-based sequential ranking index.")
     candidate: HighlightCandidate = Field(..., description="The highlight candidate used for this short.")
     source_clip_path: str = Field(..., min_length=1, description="File path to the initial trimmed clip.")
@@ -554,8 +564,15 @@ class GeneratedShort(BaseModel):
     captioned_clip_path: Optional[str] = Field(default=None, description="File path to the captioned video (if captions requested).")
     final_file_path: str = Field(..., min_length=1, description="File path to the final output video deliverable.")
     framing_type: FramingType = Field(default=FramingType.CENTER_CROP, description="Framing method used for 9:16 vertical transformation.")
-    caption_preset: Optional[CaptionPreset] = Field(default=None, description="Caption preset applied to this short.")
-    is_karaoke: bool = Field(default=False, description="Whether active word karaoke animation was applied.")
+    caption_preset: Optional[CaptionPreset] = Field(
+        default=None, description="Caption preset applied to this short."
+    )
+    is_karaoke: bool = Field(
+        default=False, description="Whether active word karaoke animation was applied."
+    )
+    caption_track: Optional[CaptionTrack] = Field(
+        default=None, description="Per-short synchronized caption track."
+    )
 
     @model_validator(mode="after")
     def validate_paths(self) -> "GeneratedShort":
@@ -672,10 +689,10 @@ class VideoJobRequest(BaseModel):
         description="Desired duration of each generated clip, in seconds (30-120 inclusive).",
     )
     number_of_clips: int = Field(
-        ...,
+        default=10,
         ge=1,
-        le=20,
-        description="Number of clips to generate from the source video (1-20 inclusive).",
+        le=15,
+        description="Number of clips to generate from the source video (1-15 inclusive).",
     )
 
 

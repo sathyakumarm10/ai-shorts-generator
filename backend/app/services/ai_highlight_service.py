@@ -185,7 +185,7 @@ class AIHighlightService:
         min_duration: float = 30.0,
         max_duration: float = 120.0,
         target_duration: float = 60.0,
-        max_clips: int = 3,
+        max_clips: int = 10,
         video_duration: Optional[float] = None,
     ) -> List[HighlightCandidate]:
         """Extract and validate AI-generated highlight candidates.
@@ -233,6 +233,27 @@ class AIHighlightService:
             dur = round(end_s - start_s, 2)
             # Relax slightly for boundary segment snapping (within 10%)
             if dur < (min_duration * 0.85) or dur > (max_duration * 1.15):
+                continue
+
+            # Deduplicate against already accepted valid candidates (IoU <= 0.35, start_distance >= 10s)
+            excessive_overlap = False
+            for existing in valid_candidates:
+                inter_start = max(start_s, existing.start_seconds)
+                inter_end = min(end_s, existing.end_seconds)
+                intersection = max(0.0, inter_end - inter_start)
+
+                union_start = min(start_s, existing.start_seconds)
+                union_end = max(end_s, existing.end_seconds)
+                union = max(1e-6, union_end - union_start)
+
+                iou = intersection / union
+                start_distance = abs(start_s - existing.start_seconds)
+
+                if iou > 0.35 or start_distance < 10.0:
+                    excessive_overlap = True
+                    break
+
+            if excessive_overlap:
                 continue
 
             # Extract matching transcript slice

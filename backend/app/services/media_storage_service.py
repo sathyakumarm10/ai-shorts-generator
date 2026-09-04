@@ -30,10 +30,13 @@ paths rooted outside the tree.
 import logging
 import shutil
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from app.services.storage_service import S3StorageService, StorageService, default_storage_service
+
+if TYPE_CHECKING:
+    from app.models import ShortsGenerationResult
 
 logger = logging.getLogger(__name__)
 
@@ -172,24 +175,71 @@ class MediaStorageService:
         return resolved
 
     def to_relative_path(self, abs_path: Path | str) -> str:
-        """Convert an absolute path to a forward-slash path relative to ``media_root``.
+        """Convert an absolute or relative path to a forward-slash path relative to ``media_root``.
 
         Returns the relative path string (e.g. ``jobs/abc/clips/clip_xyz.mp4``).
 
         Raises
         ------
         MediaStorageError
-            If the path is not inside ``media_root``.
+            If the path is not inside ``media_root`` and cannot be made relative.
         """
-        p = Path(abs_path).resolve()
+        raw_str = str(abs_path).replace("\\", "/")
+        if raw_str.startswith("jobs/"):
+            return raw_str
+
+        if "/jobs/" in raw_str:
+            idx = raw_str.find("/jobs/")
+            return raw_str[idx + 1:]
+
+        p = Path(abs_path)
+        if not p.is_absolute():
+            clean = p.as_posix().lstrip("./")
+            if clean:
+                return clean
+
+        resolved = p.resolve()
         try:
-            rel = p.relative_to(self.media_root)
+            rel = resolved.relative_to(self.media_root)
+            return rel.as_posix()
         except ValueError:
-            raise MediaStorageError(
-                f"Path '{abs_path}' is not inside media root '{self.media_root}'."
-            )
-        # Use forward slashes for URL portability
-        return rel.as_posix()
+            pass
+
+        parts = resolved.parts
+        if "jobs" in parts:
+            idx = parts.index("jobs")
+            return "/".join(parts[idx:])
+
+        raise MediaStorageError(
+            f"Path '{abs_path}' is not inside media root '{self.media_root}'."
+        )
+
+    def normalize_result_paths(
+        self, result: "ShortsGenerationResult"
+    ) -> "ShortsGenerationResult":
+        """Normalize all video and clip paths in result to relative forward-slash paths."""
+        norm_source_video = result.source_video.model_copy(
+            update={"file_path": self.to_relative_path(result.source_video.file_path)}
+        )
+        norm_shorts = []
+        for s in result.generated_shorts:
+            updates = {
+                "source_clip_path": self.to_relative_path(s.source_clip_path),
+                "vertical_clip_path": self.to_relative_path(s.vertical_clip_path),
+                "final_file_path": self.to_relative_path(s.final_file_path),
+            }
+            if s.captioned_clip_path:
+                updates["captioned_clip_path"] = self.to_relative_path(
+                    s.captioned_clip_path
+                )
+            norm_shorts.append(s.model_copy(update=updates))
+
+        return result.model_copy(
+            update={
+                "source_video": norm_source_video,
+                "generated_shorts": norm_shorts,
+            }
+        )
 
     def to_media_url(self, abs_path: Path | str) -> str:
         """Build a browser-accessible ``/api/media?path=<relative>`` or signed cloud URL.

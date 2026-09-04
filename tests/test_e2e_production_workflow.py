@@ -177,8 +177,13 @@ class TestProductionWorkflowE2E:
         first_short = shorts[0]
         final_file_path = first_short.get("final_file_path")
         assert final_file_path is not None
-        assert Path(final_file_path).is_file()
-        assert Path(final_file_path).stat().st_size > 0
+        resolved_path = (
+            Path("outputs") / final_file_path
+            if not Path(final_file_path).is_file()
+            else Path(final_file_path)
+        )
+        assert resolved_path.is_file()
+        assert resolved_path.stat().st_size > 0
 
         # 6. Stream media via API
         media_resp = client.get("/api/media", params={"file_path": final_file_path}, headers=headers)
