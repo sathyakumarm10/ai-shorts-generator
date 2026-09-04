@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { AppShell } from './layouts/AppShell'
 import { Navbar } from './components/Navbar'
-import { HeroSection } from './components/HeroSection'
-import { UploadZone } from './components/UploadZone'
-import { GenerationSettings } from './components/GenerationSettings'
-import { ProcessingView } from './components/ProcessingView'
-import { ResultsGrid } from './components/ResultsGrid'
+import { DashboardPage } from './pages/DashboardPage'
+import { CreateShortPage } from './pages/CreateShortPage'
+import { MyShortsPage } from './pages/MyShortsPage'
+import { GenerationProgress } from './components/generation/GenerationProgress'
+import { ShortGrid } from './components/results/ShortGrid'
+import { ErrorState } from './components/ui/ErrorState'
 import { JobHistoryModal } from './components/JobHistoryModal'
 import { AuthModal } from './components/AuthModal'
-import { ErrorBanner } from './components/ErrorBanner'
 import { uploadVideo, createJob, getJob, listJobs } from './api/client'
 import { AuthProvider, useAuth } from './context/AuthContext'
 
@@ -21,13 +22,16 @@ function getJobState(job) {
 }
 
 function MainApp() {
+  const [activeTab, setActiveTab] = useState('create') // 'dashboard' | 'create' | 'my-shorts'
+  const [sourceType, setSourceType] = useState('upload') // 'upload' | 'url'
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploadedData, setUploadedData] = useState(null)
+  const [videoUrl, setVideoUrl] = useState('')
   const [isUploading, setIsUploading] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const [settings, setSettings] = useState({
-    numberOfClips: 3,
+    numberOfClips: 10,
     clipDurationSeconds: 60,
     includeCaptions: true,
     captionPreset: 'default',
@@ -55,7 +59,7 @@ function MainApp() {
           const userJobs = await listJobs()
           if (Array.isArray(userJobs) && userJobs.length > 0) {
             setHistory(userJobs)
-            const active = userJobs.find(j => j.status !== 'completed' && j.status !== 'failed')
+            const active = userJobs.find((j) => j.status !== 'completed' && j.status !== 'failed')
             if (active) {
               setCurrentJob(active)
               setJobState(getJobState(active))
@@ -146,12 +150,14 @@ function MainApp() {
     setError(null)
     setSelectedFile(null)
     setUploadedData(null)
+    setVideoUrl('')
   }
 
   // Handle generation submission
   const handleGenerate = async () => {
-    if (!uploadedData?.file_path) {
-      setError('Please select and upload a valid video file first.')
+    const videoLocation = sourceType === 'upload' ? uploadedData?.file_path : videoUrl.trim()
+    if (!videoLocation) {
+      setError(sourceType === 'upload' ? 'Please select and upload a valid video file first.' : 'Please enter a valid video URL.')
       return
     }
 
@@ -160,12 +166,12 @@ function MainApp() {
 
     const payload = {
       source: {
-        type: 'upload',
-        location: uploadedData.file_path,
+        type: sourceType === 'upload' ? 'upload' : 'url',
+        location: videoLocation,
       },
       clip_duration_seconds: Number(settings.clipDurationSeconds),
       number_of_clips: Number(settings.numberOfClips),
-      include_captions: Boolean(settings.includeCaptions),
+      include_captions: Boolean(settings.includeCaptions !== false),
       caption_preset: settings.captionPreset || 'default',
       enable_karaoke: Boolean(settings.enableKaraoke !== false),
       min_clip_duration: Number(settings.minClipDuration),
@@ -178,7 +184,7 @@ function MainApp() {
       const job = await createJob(payload)
       setCurrentJob(job)
       setJobState('processing')
-      saveToHistory(job, selectedFile?.name)
+      saveToHistory(job, selectedFile?.name || (videoUrl ? 'Web Video' : 'Generated Short'))
     } catch (err) {
       setError(err.message || 'Failed to start shorts generation job.')
     } finally {
@@ -238,67 +244,98 @@ function MainApp() {
   }
 
   return (
-    <div className="app-container">
+    <AppShell
+      activeTab={activeTab}
+      onSelectTab={(tab) => {
+        setActiveTab(tab)
+        // If switching tabs while not actively in results/processing, reset errors
+        if (jobState === 'failed') {
+          setJobState('idle')
+        }
+      }}
+      onOpenAuth={() => setIsAuthOpen(true)}
+      historyCount={history.length}
+    >
+      {/* Top Navbar for quick actions and legacy compatibility */}
       <Navbar
         onOpenHistory={() => setIsHistoryOpen(true)}
         historyCount={history.length}
         onOpenAuth={() => setIsAuthOpen(true)}
       />
 
-      <main className="container" style={{ flex: 1, paddingBottom: '3rem' }}>
-        {jobState === 'idle' && <HeroSection />}
+      {error && (
+        <ErrorState
+          title="Operation Failed"
+          message={error}
+          onRetry={jobState === 'failed' ? handleReset : null}
+          onDismiss={() => setError(null)}
+        />
+      )}
 
-        {error && (
-          <ErrorBanner
-            message={error}
-            onRetry={jobState === 'failed' ? handleReset : null}
-            onDismiss={() => setError(null)}
-          />
-        )}
+      {/* Active Job State takes precedence for Processing and Results */}
+      {jobState === 'processing' && (
+        <GenerationProgress
+          job={currentJob}
+          onCancel={handleReset}
+        />
+      )}
 
-        {jobState === 'idle' && (
-          <section className="workspace-grid">
-            <UploadZone
+      {jobState === 'results' && currentJob?.result && (
+        <ShortGrid
+          result={currentJob.result}
+          jobId={currentJob.job_id}
+          onReset={handleReset}
+        />
+      )}
+
+      {jobState === 'failed' && (
+        <div style={{ textAlign: 'center', marginTop: '2rem' }}>
+          <button type="button" className="btn-primary" onClick={handleReset}>
+            Create Another Short
+          </button>
+        </div>
+      )}
+
+      {/* Idle / Standard Tab Views */}
+      {jobState === 'idle' && (
+        <>
+          {activeTab === 'dashboard' && (
+            <DashboardPage
+              onNavigateCreate={() => setActiveTab('create')}
+              history={history}
+              onSelectJob={handleSelectHistoryJob}
+              currentJob={currentJob}
+            />
+          )}
+
+          {activeTab === 'create' && (
+            <CreateShortPage
+              sourceType={sourceType}
+              setSourceType={setSourceType}
               selectedFile={selectedFile}
               uploadedData={uploadedData}
+              videoUrl={videoUrl}
+              setVideoUrl={setVideoUrl}
               isUploading={isUploading}
+              isSubmitting={isSubmitting}
               onFileSelected={handleFileSelected}
               onClearFile={handleClearFile}
-            />
-
-            <GenerationSettings
               settings={settings}
-              onChange={setSettings}
+              setSettings={setSettings}
               onGenerate={handleGenerate}
-              isSubmitting={isSubmitting || isUploading}
-              canSubmit={Boolean(uploadedData?.file_path)}
+              error={null}
             />
-          </section>
-        )}
+          )}
 
-        {jobState === 'processing' && (
-          <ProcessingView
-            job={currentJob}
-            onCancel={handleReset}
-          />
-        )}
-
-        {jobState === 'results' && currentJob?.result && (
-          <ResultsGrid
-            result={currentJob.result}
-            jobId={currentJob.job_id}
-            onReset={handleReset}
-          />
-        )}
-
-        {jobState === 'failed' && (
-          <div style={{ textAlign: 'center', marginTop: '2rem' }}>
-            <button type="button" className="btn-primary" onClick={handleReset}>
-              Create Another Short
-            </button>
-          </div>
-        )}
-      </main>
+          {activeTab === 'my-shorts' && (
+            <MyShortsPage
+              history={history}
+              onSelectJob={handleSelectHistoryJob}
+              onNavigateCreate={() => setActiveTab('create')}
+            />
+          )}
+        </>
+      )}
 
       <JobHistoryModal
         isOpen={isHistoryOpen}
@@ -312,7 +349,7 @@ function MainApp() {
         isOpen={isAuthOpen}
         onClose={() => setIsAuthOpen(false)}
       />
-    </div>
+    </AppShell>
   )
 }
 

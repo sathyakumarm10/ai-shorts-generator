@@ -25,7 +25,7 @@ def format_srt_timestamp(seconds: float) -> str:
     Returns:
         str: Formatted time string like '00:01:23,456'.
     """
-    total_ms = int(round(seconds * 1000))
+    total_ms = round(seconds * 1000)
     hours = total_ms // 3600000
     total_ms %= 3600000
     minutes = total_ms // 60000
@@ -154,8 +154,8 @@ class CaptionService:
                 f"Expected TimestampedTranscript, got {type(transcript).__name__}"
             )
 
-        s_start = max(0.0, float(start_seconds))
-        s_end = float(end_seconds)
+        s_start = max(0.0, start_seconds)
+        s_end = end_seconds
         duration = s_end - s_start
         if duration <= 0.05 or not transcript.segments:
             return CaptionTrack(segments=[])

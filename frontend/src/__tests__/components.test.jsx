@@ -71,7 +71,7 @@ describe('GenerationSettings Component', () => {
       />
     )
 
-    expect(screen.getByText('3 clips')).toBeInTheDocument()
+    expect(screen.getByText(/3 shorts/i)).toBeInTheDocument()
     expect(screen.getByText('45s')).toBeInTheDocument()
 
     // Test toggle
