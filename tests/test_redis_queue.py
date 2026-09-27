@@ -438,7 +438,7 @@ class TestRedisJobQueueDiagnostics:
 
         assert diag.connected is False
         assert diag.error is not None
-        assert "connection refused" in diag.error
+        assert diag.error == "Queue health check failed (Exception)."
 
 
 # ---------------------------------------------------------------------------

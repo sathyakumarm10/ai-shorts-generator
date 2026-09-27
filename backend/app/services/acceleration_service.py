@@ -16,6 +16,8 @@ import shutil
 import subprocess
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from app.services.media_executable_config import resolve_ffmpeg_executable
+
 logger = logging.getLogger(__name__)
 
 
@@ -199,12 +201,12 @@ class HardwareAccelerationService:
         self._cuda_device_names_cache = names
         return names
 
-    def is_nvenc_available(self, ffmpeg_executable: str = "ffmpeg") -> bool:
+    def is_nvenc_available(self, ffmpeg_executable: Optional[str] = None) -> bool:
         """Check if FFmpeg has h264_nvenc encoder support compiled and usable."""
         if self._nvenc_available_cache is not None:
             return self._nvenc_available_cache
 
-        executable = shutil.which(ffmpeg_executable) or ffmpeg_executable
+        executable = resolve_ffmpeg_executable(ffmpeg_executable)
         try:
             res = subprocess.run(
                 [executable, "-encoders"],
@@ -261,7 +263,7 @@ class HardwareAccelerationService:
 
         return effective_dev, effective_compute
 
-    def should_use_nvenc(self, ffmpeg_executable: str = "ffmpeg") -> bool:
+    def should_use_nvenc(self, ffmpeg_executable: Optional[str] = None) -> bool:
         """Determine if FFmpeg should attempt NVENC GPU encoding."""
         if self.config.ffmpeg_encoder_mode == FFmpegEncoderMode.CPU:
             return False
@@ -296,7 +298,7 @@ class HardwareAccelerationService:
         self,
         command_builder: Callable[[bool], List[str]],
         output_file_validator: Optional[Callable[[], bool]] = None,
-        ffmpeg_executable: str = "ffmpeg",
+        ffmpeg_executable: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Execute an FFmpeg command with GPU NVENC if available, falling back to CPU on failure.
 
@@ -347,7 +349,7 @@ class HardwareAccelerationService:
             check=False,
         )
 
-    def get_acceleration_report(self, ffmpeg_executable: str = "ffmpeg") -> AccelerationReport:
+    def get_acceleration_report(self, ffmpeg_executable: Optional[str] = None) -> AccelerationReport:
         """Generate a complete diagnostic report of acceleration status and active modes."""
         cuda_avail = self.is_cuda_available()
         nvenc_avail = self.is_nvenc_available(ffmpeg_executable)

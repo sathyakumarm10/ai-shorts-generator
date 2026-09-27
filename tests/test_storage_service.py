@@ -24,12 +24,29 @@ from app.services.storage_service import (
 
 
 class TestStorageConfig:
+    STORAGE_ENV_NAMES = (
+        "STORAGE_BACKEND",
+        "S3_ENDPOINT",
+        "S3_ENDPOINT_URL",
+        "S3_REGION",
+        "S3_BUCKET",
+        "S3_ACCESS_KEY_ID",
+        "S3_SECRET_ACCESS_KEY",
+        "S3_PUBLIC_BASE_URL",
+        "R2_ENDPOINT",
+        "R2_REGION",
+        "R2_BUCKET",
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+        "R2_PUBLIC_BASE_URL",
+    )
+
+    def clear_storage_env(self, monkeypatch):
+        for name in self.STORAGE_ENV_NAMES:
+            monkeypatch.delenv(name, raising=False)
+
     def test_default_config(self, monkeypatch):
-        monkeypatch.delenv("STORAGE_BACKEND", raising=False)
-        monkeypatch.delenv("S3_ENDPOINT", raising=False)
-        monkeypatch.delenv("S3_BUCKET", raising=False)
-        monkeypatch.delenv("S3_ACCESS_KEY_ID", raising=False)
-        monkeypatch.delenv("S3_SECRET_ACCESS_KEY", raising=False)
+        self.clear_storage_env(monkeypatch)
 
         config = StorageConfig.from_env()
         assert config.backend == StorageBackend.LOCAL
@@ -38,6 +55,7 @@ class TestStorageConfig:
         assert config.max_retries == 3
 
     def test_s3_config_from_env(self, monkeypatch):
+        self.clear_storage_env(monkeypatch)
         monkeypatch.setenv("STORAGE_BACKEND", "s3")
         monkeypatch.setenv("S3_ENDPOINT", "https://s3.us-west-2.amazonaws.com")
         monkeypatch.setenv("S3_REGION", "us-west-2")
@@ -60,6 +78,7 @@ class TestStorageConfig:
         assert config.enable_local_fallback is True
 
     def test_r2_config_from_env(self, monkeypatch):
+        self.clear_storage_env(monkeypatch)
         monkeypatch.setenv("STORAGE_BACKEND", "r2")
         monkeypatch.setenv("R2_ENDPOINT", "https://acc123.r2.cloudflarestorage.com")
         monkeypatch.setenv("R2_BUCKET", "r2-shorts-bucket")
@@ -71,6 +90,44 @@ class TestStorageConfig:
         assert config.endpoint_url == "https://acc123.r2.cloudflarestorage.com"
         assert config.region == "auto"
         assert config.bucket == "r2-shorts-bucket"
+
+    def test_preferred_s3_values_win_over_r2_aliases(self, monkeypatch):
+        self.clear_storage_env(monkeypatch)
+        monkeypatch.setenv("STORAGE_BACKEND", "r2")
+        monkeypatch.setenv("S3_ENDPOINT", "https://preferred.example.com")
+        monkeypatch.setenv("S3_BUCKET", "preferred-bucket")
+        monkeypatch.setenv("R2_ENDPOINT", "https://legacy.example.com")
+        monkeypatch.setenv("R2_BUCKET", "legacy-bucket")
+
+        config = StorageConfig.from_env()
+
+        assert config.endpoint_url == "https://preferred.example.com"
+        assert config.bucket == "preferred-bucket"
+
+    def test_blank_s3_values_fall_back_to_r2_aliases(self, monkeypatch):
+        self.clear_storage_env(monkeypatch)
+        monkeypatch.setenv("STORAGE_BACKEND", "r2")
+        monkeypatch.setenv("S3_ENDPOINT", "  ")
+        monkeypatch.setenv("S3_BUCKET", "")
+        monkeypatch.setenv("R2_ENDPOINT", "https://legacy.example.com")
+        monkeypatch.setenv("R2_BUCKET", "legacy-bucket")
+
+        config = StorageConfig.from_env()
+
+        assert config.endpoint_url == "https://legacy.example.com"
+        assert config.bucket == "legacy-bucket"
+
+    def test_missing_cloud_values_use_documented_defaults(self, monkeypatch):
+        self.clear_storage_env(monkeypatch)
+        monkeypatch.setenv("STORAGE_BACKEND", "r2")
+
+        config = StorageConfig.from_env()
+
+        assert config.endpoint_url is None
+        assert config.region == "auto"
+        assert config.bucket == "ai-shorts-bucket"
+        assert config.access_key_id == ""
+        assert config.secret_access_key == ""
 
 
 class TestLocalStorageService:
@@ -302,6 +359,8 @@ class TestStorageDiagnosticsAndAPI:
         data = response.json()
         assert "backend" in data
         assert "configured_backend" in data
-        assert "bucket" in data
         assert "is_cloud_active" in data
         assert "local_fallback_enabled" in data
+        assert "bucket" not in data
+        assert "endpoint_url" not in data
+        assert "public_base_url" not in data

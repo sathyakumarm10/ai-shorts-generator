@@ -7,10 +7,11 @@ file size.
 
 import json
 from pathlib import Path
-import shutil
 import subprocess
+from typing import Optional
 
 from app.models import IngestedVideo, VideoMetadata
+from app.services.media_executable_config import resolve_ffprobe_executable
 
 
 class VideoMetadataError(Exception):
@@ -22,7 +23,7 @@ class VideoMetadataError(Exception):
 class VideoMetadataService:
     """Service responsible for extracting technical metadata from an ingested video."""
 
-    def __init__(self, ffprobe_executable: str = "ffprobe") -> None:
+    def __init__(self, ffprobe_executable: Optional[str] = None) -> None:
         self.ffprobe_executable = ffprobe_executable
 
     def extract_metadata(self, video: IngestedVideo | str | Path) -> VideoMetadata:
@@ -54,7 +55,7 @@ class VideoMetadataService:
             raise VideoMetadataError(f"Could not read video file size: {exc}") from exc
 
         # Check for ffprobe availability
-        executable = shutil.which(self.ffprobe_executable) or self.ffprobe_executable
+        executable = resolve_ffprobe_executable(self.ffprobe_executable)
 
         cmd = [
             executable,

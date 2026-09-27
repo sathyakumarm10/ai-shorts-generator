@@ -186,6 +186,42 @@ MIGRATIONS: List[Tuple[int, str, List[str], List[str]]] = [
             """,
         ],
     ),
+    (
+        4,
+        "add_media_assets",
+        [
+            """
+            CREATE TABLE IF NOT EXISTS media_assets (
+                asset_id          TEXT PRIMARY KEY,
+                owner_id          TEXT NOT NULL,
+                stored_path       TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                size_bytes        INTEGER,
+                status            TEXT NOT NULL DEFAULT 'uploaded'
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_media_assets_owner_id ON media_assets(owner_id);
+            """,
+        ],
+        [
+            """
+            CREATE TABLE IF NOT EXISTS media_assets (
+                asset_id          TEXT PRIMARY KEY,
+                owner_id          TEXT NOT NULL,
+                stored_path       TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                created_at        TIMESTAMPTZ NOT NULL,
+                size_bytes        BIGINT,
+                status            TEXT NOT NULL DEFAULT 'uploaded'
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_media_assets_owner_id ON media_assets(owner_id);
+            """,
+        ],
+    ),
 ]
 
 
@@ -214,30 +250,32 @@ def run_sqlite_migrations(conn: Any) -> int:
     for version, name, sqlite_sql_list, _ in MIGRATIONS:
         if version not in applied_versions:
             logger.info("Applying SQLite migration %d: %s", version, name)
-            for stmt in sqlite_sql_list:
-                stmt_clean = stmt.strip()
-                if stmt_clean:
-                    try:
+            try:
+                cursor.execute("BEGIN;")
+                for stmt in sqlite_sql_list:
+                    stmt_clean = stmt.strip()
+                    if stmt_clean:
                         cursor.execute(stmt_clean)
-                    except Exception as exc:
-                        logger.warning("Migration statement note (%s): %s", name, exc)
 
-            # Check and add columns dynamically for SQLite if needed
-            if version == 2:
-                _ensure_sqlite_column(conn, "jobs", "retry_count", "INTEGER NOT NULL DEFAULT 0")
-                _ensure_sqlite_column(conn, "jobs", "queue_name", "TEXT")
-                _ensure_sqlite_column(conn, "jobs", "user_id", "TEXT")
-            elif version == 3:
-                _ensure_sqlite_column(conn, "users", "role", "TEXT NOT NULL DEFAULT 'user'")
-                _ensure_sqlite_column(conn, "users", "is_active", "INTEGER NOT NULL DEFAULT 1")
+                # Check and add columns dynamically for SQLite if needed
+                if version == 2:
+                    _ensure_sqlite_column(conn, "jobs", "retry_count", "INTEGER NOT NULL DEFAULT 0")
+                    _ensure_sqlite_column(conn, "jobs", "queue_name", "TEXT")
+                    _ensure_sqlite_column(conn, "jobs", "user_id", "TEXT")
+                elif version == 3:
+                    _ensure_sqlite_column(conn, "users", "role", "TEXT NOT NULL DEFAULT 'user'")
+                    _ensure_sqlite_column(conn, "users", "is_active", "INTEGER NOT NULL DEFAULT 1")
 
-            now_iso = datetime.now(timezone.utc).isoformat()
-            cursor.execute(
-                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?);",
-                (version, name, now_iso),
-            )
-            conn.commit()
-            latest_version = version
+                now_iso = datetime.now(timezone.utc).isoformat()
+                cursor.execute(
+                    "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?);",
+                    (version, name, now_iso),
+                )
+                conn.commit()
+                latest_version = version
+            except Exception:
+                conn.rollback()
+                raise
 
     return latest_version
 
@@ -248,11 +286,7 @@ def _ensure_sqlite_column(conn: Any, table: str, column: str, col_def: str) -> N
     cursor.execute(f"PRAGMA table_info({table});")
     existing_cols = [row[1] for row in cursor.fetchall()]
     if column not in existing_cols:
-        try:
-            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def};")
-            conn.commit()
-        except Exception:
-            pass
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def};")
 
 
 def run_postgres_migrations(conn: Any) -> int:

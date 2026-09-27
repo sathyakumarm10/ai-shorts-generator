@@ -270,7 +270,7 @@ class RedisJobQueue:
             pipe.zrem(self._key_delayed, job_id)
             pipe.rpush(self._key_dead, json.dumps(data))
             pipe.execute()
-            logger.error("Job %s permanently failed after %d attempts: %s", job_id, current_attempt, error)
+            logger.error("Job %s permanently failed after %d attempts", job_id, current_attempt)
             return False
 
     def recover_stale_jobs(self, visibility_timeout_seconds: Optional[float] = None) -> int:
@@ -353,7 +353,7 @@ class RedisJobQueue:
                 active_workers_count=0,
                 local_fallback_active=self.config.enable_local_fallback,
                 latency_ms=latency_ms,
-                error=str(exc),
+                error=f"Queue health check failed ({type(exc).__name__}).",
             )
 
 
@@ -427,7 +427,10 @@ def create_job_queue(config: Optional[QueueConfig] = None) -> JobQueueBase:
             return RedisJobQueue(config=cfg)
         except Exception as exc:
             if cfg.enable_local_fallback:
-                logger.warning("Failed to connect to Redis queue (%s). Falling back to ThreadPool queue.", exc)
+                logger.warning(
+                    "Failed to connect to Redis queue (%s). Falling back to ThreadPool queue.",
+                    type(exc).__name__,
+                )
                 return ThreadPoolJobQueue(config=cfg)
             raise
 

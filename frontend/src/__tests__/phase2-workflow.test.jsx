@@ -146,7 +146,7 @@ describe('Phase 2 - GenerationProgress Component with Real Backend Metrics', () 
       message: 'Converting short #5/10 to 9:16 vertical format',
     }
 
-    render(<GenerationProgress job={job} onCancel={() => {}} />)
+    render(<GenerationProgress job={job} onStartOver={() => {}} />)
 
     expect(screen.getByText('Creating Your Shorts')).toBeInTheDocument()
     expect(screen.getByText('Converting short #5/10 to 9:16 vertical format')).toBeInTheDocument()
@@ -154,7 +154,7 @@ describe('Phase 2 - GenerationProgress Component with Real Backend Metrics', () 
     expect(screen.getByText('10')).toBeInTheDocument()
     expect(screen.getByText('Generated:')).toBeInTheDocument()
     expect(screen.getByText('4')).toBeInTheDocument() // Rendered 4 so far, currently on #5
-    expect(screen.getByText('79%')).toBeInTheDocument()
+    expect(screen.getByText('Estimated 79%')).toBeInTheDocument()
     expect(screen.getAllByText('Converting to 9:16 vertical video').length).toBeGreaterThan(0)
   })
 })

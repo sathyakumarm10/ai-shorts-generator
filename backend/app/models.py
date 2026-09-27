@@ -136,12 +136,13 @@ class VideoSource(BaseModel):
     """Represents the origin of a source video without performing processing.
 
     - For `youtube` sources, `location` must be a valid HTTP or HTTPS URL.
-    - For `upload` sources, `location` must be a non-empty string representing
-      a local file path/reference.
+    - New `upload` API requests use an opaque `asset_id`.
+    - `location` remains available for trusted legacy/internal job execution.
     """
 
     type: VideoSourceType = Field(..., description="The type of video source (youtube or upload).")
-    location: str = Field(..., min_length=1, description="The URL or file reference for the source video.")
+    location: Optional[str] = Field(default=None, min_length=1, description="The URL or trusted internal file reference.")
+    asset_id: Optional[str] = Field(default=None, min_length=32, max_length=128, description="Opaque uploaded-media asset identifier.")
 
     @model_validator(mode="before")
     @classmethod
@@ -150,15 +151,44 @@ class VideoSource(BaseModel):
             source_type = data.get("type")
             location = data.get("location")
             if source_type == VideoSourceType.YOUTUBE or source_type == VideoSourceType.YOUTUBE.value:
-                if location is not None:
-                    TypeAdapter(HttpUrl).validate_python(location)
+                if not location:
+                    raise ValueError("YouTube sources require a URL location")
+                TypeAdapter(HttpUrl).validate_python(location)
+            elif source_type == VideoSourceType.UPLOAD or source_type == VideoSourceType.UPLOAD.value:
+                asset_id = data.get("asset_id")
+                if not asset_id and not location:
+                    raise ValueError("Upload sources require an asset_id")
+                if asset_id and not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", str(asset_id)):
+                    raise ValueError("Invalid upload asset_id format")
         elif hasattr(data, "type") and hasattr(data, "location"):
             source_type = getattr(data, "type")
             location = getattr(data, "location")
             if source_type == VideoSourceType.YOUTUBE or source_type == VideoSourceType.YOUTUBE.value:
-                if location is not None:
-                    TypeAdapter(HttpUrl).validate_python(location)
+                if not location:
+                    raise ValueError("YouTube sources require a URL location")
+                TypeAdapter(HttpUrl).validate_python(location)
         return data
+
+
+class MediaAsset(BaseModel):
+    """Persistent internal record for an uploaded source asset."""
+
+    asset_id: str = Field(..., min_length=32, max_length=128)
+    owner_id: str = Field(..., min_length=1)
+    stored_path: str = Field(..., min_length=1)
+    original_filename: str = Field(..., min_length=1, max_length=255)
+    created_at: datetime
+    size_bytes: Optional[int] = Field(default=None, ge=0)
+    status: str = Field(default="uploaded", min_length=1, max_length=32)
+
+
+class UploadAssetResponse(BaseModel):
+    """Public upload response without server-local filesystem details."""
+
+    asset_id: str
+    filename: str
+    file_size_bytes: int = Field(..., ge=0)
+    created_at: datetime
 
 
 class IngestedVideo(BaseModel):
@@ -176,6 +206,10 @@ class IngestedVideo(BaseModel):
     framing_type: Optional[FramingType] = Field(
         default=None,
         description="Framing type applied to this video (e.g. center_crop or smart_framing).",
+    )
+    processing_warning: Optional[str] = Field(
+        default=None,
+        description="Safe warning describing a non-fatal processing fallback.",
     )
 
 
@@ -331,6 +365,43 @@ class HighlightSource(str, Enum):
 
     HEURISTIC = "heuristic"
     AI = "ai"
+
+
+class HighlightMethod(str, Enum):
+    """Method ultimately used to select highlight candidates."""
+
+    REMOTE_AI = "remote_ai"
+    HEURISTIC_FALLBACK = "heuristic_fallback"
+
+
+class OutcomeStatus(str, Enum):
+    """Severity of a persisted processing outcome."""
+
+    SUCCESS = "success"
+    WARNING = "warning"
+    FAILURE = "failure"
+
+
+class ProcessingStage(str, Enum):
+    """Stable public names for important pipeline stages."""
+
+    SOURCE_INGESTION = "source_ingestion"
+    METADATA = "metadata"
+    TRANSCRIPTION = "transcription"
+    HIGHLIGHT_SELECTION = "highlight_selection"
+    CLIP_RENDER = "clip_render"
+    VERTICAL_RENDER = "vertical_render"
+    CAPTIONS = "captions"
+    OUTPUT_VALIDATION = "output_validation"
+    STORAGE_SYNC = "storage_sync"
+
+
+class StageOutcome(BaseModel):
+    """Safe user-facing outcome for one processing stage."""
+
+    stage: ProcessingStage
+    status: OutcomeStatus
+    message: str = Field(..., min_length=1, max_length=500)
 
 
 class HighlightCandidate(BaseModel):
@@ -573,6 +644,12 @@ class GeneratedShort(BaseModel):
     caption_track: Optional[CaptionTrack] = Field(
         default=None, description="Per-short synchronized caption track."
     )
+    captions_present: bool = Field(
+        default=False, description="Whether captions were successfully burned into the final video."
+    )
+    warnings: list[str] = Field(
+        default_factory=list, description="Safe warnings specific to this generated short."
+    )
 
     @model_validator(mode="after")
     def validate_paths(self) -> "GeneratedShort":
@@ -583,6 +660,17 @@ class GeneratedShort(BaseModel):
         if self.captioned_clip_path is not None and not self.captioned_clip_path.strip():
             raise ValueError("captioned_clip_path cannot be whitespace only when provided")
         return self
+
+
+class ClipProcessingOutcome(BaseModel):
+    """Outcome for every candidate selected for clip generation."""
+
+    index: int = Field(..., ge=1)
+    candidate: HighlightCandidate
+    status: OutcomeStatus
+    stage: ProcessingStage
+    message: str = Field(..., min_length=1, max_length=500)
+    generated_short_index: Optional[int] = Field(default=None, ge=1)
 
 
 class ShortsGenerationResult(BaseModel):
@@ -599,6 +687,11 @@ class ShortsGenerationResult(BaseModel):
         default_factory=list,
         description="List of rendered short video artifacts generated from top candidates.",
     )
+    stage_outcomes: list[StageOutcome] = Field(default_factory=list)
+    clip_outcomes: list[ClipProcessingOutcome] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    completion_state: OutcomeStatus = Field(default=OutcomeStatus.SUCCESS)
+    highlight_method: Optional[HighlightMethod] = None
 
     @model_validator(mode="after")
     def validate_result(self) -> "ShortsGenerationResult":
@@ -609,6 +702,8 @@ class ShortsGenerationResult(BaseModel):
             seen_indices.add(short.index)
             if short.index != idx:
                 raise ValueError(f"Generated short index {short.index} must be sequential 1-based (expected {idx})")
+        if self.warnings or any(outcome.status != OutcomeStatus.SUCCESS for outcome in self.clip_outcomes):
+            self.completion_state = OutcomeStatus.WARNING
         return self
 
 
@@ -709,4 +804,3 @@ class VideoJobResponse(BaseModel):
     clip_duration: int
     number_of_clips: int
     created_at: datetime = Field(..., description="UTC timestamp of when the job was created.")
-

@@ -186,8 +186,8 @@ export function VideoWorkspacePreview({
               type="button"
               className="btn-secondary"
               onClick={handleCopyPath}
-              title="Copy file path"
-              aria-label="Copy file path"
+              title="Copy media reference"
+              aria-label="Copy media reference"
             >
               {copied ? <Check size={15} /> : <Copy size={15} />}
             </button>

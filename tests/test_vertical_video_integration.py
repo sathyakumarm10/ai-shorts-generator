@@ -10,6 +10,7 @@ import subprocess
 import pytest
 
 from app.models import IngestedVideo, VerticalVideoRequest
+from app.services.media_executable_config import resolve_ffmpeg_executable, resolve_ffprobe_executable
 from app.services.vertical_video_service import VerticalVideoService
 from app.services.video_metadata_service import VideoMetadataService
 
@@ -17,10 +18,12 @@ from app.services.video_metadata_service import VideoMetadataService
 class TestVerticalVideoRealIntegration:
     def test_real_ffmpeg_vertical_9_16_conversion(self, tmp_path: Path):
         """Convert synthetic 16:9 landscape video into 9:16 vertical Short using real FFmpeg."""
-        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
-        ffprobe_bin = shutil.which("ffprobe") or "ffprobe"
+        ffmpeg_bin = resolve_ffmpeg_executable()
+        ffprobe_bin = resolve_ffprobe_executable()
 
-        if not shutil.which(ffmpeg_bin) or not shutil.which(ffprobe_bin):
+        if not (Path(ffmpeg_bin).is_file() or shutil.which(ffmpeg_bin)) or not (
+            Path(ffprobe_bin).is_file() or shutil.which(ffprobe_bin)
+        ):
             pytest.skip("FFmpeg and/or ffprobe are not available on the system.")
 
         # 1. Create a 3-second 16:9 landscape test video (1280x720) with audio

@@ -5,12 +5,13 @@ endpoints continue to work after adding the new job creation endpoint.
 """
 
 from concurrent.futures import Future
+from io import BytesIO
 from unittest.mock import MagicMock
 # pyrefly: ignore [missing-import]
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import _public_job_record, _public_media_reference, app
 from app.models import IngestedVideo, JobStatus, VideoJobRequest, VideoSource, VideoSourceType
 from app.services import job_service
 from app.services.job_runner_service import default_job_runner
@@ -43,6 +44,15 @@ def _payload(**overrides):
     return payload
 
 
+def _upload_asset() -> str:
+    response = client.post(
+        "/api/upload",
+        files={"file": ("source.mp4", BytesIO(b"video bytes"), "video/mp4")},
+    )
+    assert response.status_code == 200
+    return response.json()["asset_id"]
+
+
 # ---------------------------------------------------------------------
 # Existing endpoints should keep working.
 # ---------------------------------------------------------------------
@@ -60,6 +70,29 @@ def test_health_check_still_works():
     assert response.json()["status"] == "ok"
 
 
+def test_public_job_record_hides_legacy_source_path(tmp_path):
+    from datetime import datetime, timezone
+    from app.models import JobRecord
+
+    job = JobRecord(
+        job_id="legacy-job",
+        status=JobStatus.QUEUED,
+        created_at=datetime.now(timezone.utc),
+        user_id="internal-owner-id",
+        source=VideoSource(
+            type=VideoSourceType.UPLOAD,
+            location=r"C:\server\private\uploaded-video.mp4",
+        ),
+    )
+
+    public_job = _public_job_record(job)
+
+    assert public_job.user_id == "internal-owner-id"
+    assert public_job.source is not None
+    assert public_job.source.location is None
+    assert _public_media_reference(str(tmp_path / "private.mp4")) == "unavailable"
+
+
 # ---------------------------------------------------------------------
 # POST /api/jobs - valid requests
 # ---------------------------------------------------------------------
@@ -75,6 +108,7 @@ def test_create_job_with_valid_youtube_request_returns_expected_shape():
     assert body["source"] == {
         "type": "youtube",
         "location": "https://www.youtube.com/watch?v=example",
+        "asset_id": None,
     }
     assert body["clip_duration"] == VALID_PAYLOAD["clip_duration"]
     assert body["number_of_clips"] == VALID_PAYLOAD["number_of_clips"]
@@ -89,10 +123,11 @@ def test_create_job_with_valid_youtube_request_returns_expected_shape():
 
 
 def test_create_job_with_valid_upload_request():
+    asset_id = _upload_asset()
     upload_payload = {
         "source": {
             "type": "upload",
-            "location": "/uploads/user_video.mp4",
+            "asset_id": asset_id,
         },
         "clip_duration": 45,
         "number_of_clips": 3,
@@ -103,7 +138,8 @@ def test_create_job_with_valid_upload_request():
     assert body["status"] == "queued"
     assert body["source"] == {
         "type": "upload",
-        "location": "/uploads/user_video.mp4",
+        "location": None,
+        "asset_id": asset_id,
     }
     assert body["clip_duration"] == 45
     assert body["number_of_clips"] == 3
@@ -247,7 +283,7 @@ def test_get_job_returns_created_job():
     assert fetched_job["status"] == "queued"
     assert fetched_job["clip_duration"] == VALID_PAYLOAD["clip_duration"]
     assert fetched_job["number_of_clips"] == VALID_PAYLOAD["number_of_clips"]
-    assert fetched_job["source"] == VALID_PAYLOAD["source"]
+    assert fetched_job["source"] == {**VALID_PAYLOAD["source"], "asset_id": None}
 
 
 # ---------------------------------------------------------------------
@@ -719,6 +755,9 @@ def test_media_tools_all_available(monkeypatch):
 def test_media_tools_ffmpeg_unavailable(monkeypatch):
     from app.services.media_tools_service import MediaToolsService
 
+    monkeypatch.delenv("FFMPEG_PATH", raising=False)
+    monkeypatch.delenv("FFPROBE_PATH", raising=False)
+
     def mock_which(cmd, path=None):
         if cmd == "ffmpeg":
             return None
@@ -737,6 +776,9 @@ def test_media_tools_ffmpeg_unavailable(monkeypatch):
 
 def test_media_tools_ffprobe_unavailable(monkeypatch):
     from app.services.media_tools_service import MediaToolsService
+
+    monkeypatch.delenv("FFMPEG_PATH", raising=False)
+    monkeypatch.delenv("FFPROBE_PATH", raising=False)
 
     def mock_which(cmd, path=None):
         if cmd == "ffprobe":
@@ -962,10 +1004,11 @@ def test_video_clip_service_missing_output_file(monkeypatch, tmp_path):
 
 
 def test_create_job_with_shorts_generation_request_payload():
+    asset_id = _upload_asset()
     payload = {
         "source": {
             "type": "upload",
-            "location": "/uploads/my_podcast.mp4",
+            "asset_id": asset_id,
         },
         "clip_duration_seconds": 45.0,
         "number_of_clips": 3,
@@ -982,6 +1025,44 @@ def test_create_job_with_shorts_generation_request_payload():
     assert body["message"] == "Job queued"
 
 
+@pytest.mark.parametrize(
+    "caption_preset",
+    ["default", "punch_pop", "clean_creator", "word_highlight"],
+)
+def test_every_visible_frontend_caption_preset_is_accepted(caption_preset):
+    response = client.post(
+        "/api/jobs",
+        json={
+            "source": {
+                "type": "youtube",
+                "location": "https://www.youtube.com/watch?v=caption-contract",
+            },
+            "clip_duration_seconds": 30,
+            "number_of_clips": 1,
+            "caption_preset": caption_preset,
+        },
+    )
+
+    assert response.status_code == 200
+
+
+def test_invalid_caption_preset_is_rejected():
+    response = client.post(
+        "/api/jobs",
+        json={
+            "source": {
+                "type": "youtube",
+                "location": "https://www.youtube.com/watch?v=caption-contract",
+            },
+            "clip_duration_seconds": 30,
+            "number_of_clips": 1,
+            "caption_preset": "not-a-real-preset",
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_get_completed_job_record_exposes_results_and_metadata():
     from app.models import (
         GeneratedShort,
@@ -995,11 +1076,17 @@ def test_get_completed_job_record_exposes_results_and_metadata():
     from app.services.job_service import default_job_service
 
     req = ShortsGenerationRequest(
-        source=VideoSource(type=VideoSourceType.UPLOAD, location="video.mp4"),
+        source=VideoSource(type=VideoSourceType.YOUTUBE, location="https://example.com/video.mp4"),
         clip_duration_seconds=30.0,
         number_of_clips=1,
     )
-    job = default_job_service.create_job(req)
+    create_response = client.post(
+        "/api/jobs",
+        json=req.model_dump(mode="json", exclude={"user_id"}),
+    )
+    assert create_response.status_code == 200
+    job = default_job_service.get_job(create_response.json()["job_id"])
+    assert job is not None
     cand = HighlightCandidate(
         start_seconds=5.0,
         end_seconds=35.0,
@@ -1040,11 +1127,17 @@ def test_get_failed_job_record_exposes_error():
     from app.services.job_service import default_job_service
 
     req = ShortsGenerationRequest(
-        source=VideoSource(type=VideoSourceType.UPLOAD, location="invalid.mp4"),
+        source=VideoSource(type=VideoSourceType.YOUTUBE, location="https://example.com/invalid.mp4"),
         clip_duration_seconds=30.0,
         number_of_clips=1,
     )
-    job = default_job_service.create_job(req)
+    create_response = client.post(
+        "/api/jobs",
+        json=req.model_dump(mode="json", exclude={"user_id"}),
+    )
+    assert create_response.status_code == 200
+    job = default_job_service.get_job(create_response.json()["job_id"])
+    assert job is not None
     default_job_service.fail_job(job.job_id, "Corrupt audio stream in source video")
 
     response = client.get(f"/api/jobs/{job.job_id}")
@@ -1052,9 +1145,3 @@ def test_get_failed_job_record_exposes_error():
     body = response.json()
     assert body["status"] == "failed"
     assert "Corrupt audio stream" in body["error"]
-
-
-
-
-
-

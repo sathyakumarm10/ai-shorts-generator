@@ -95,7 +95,7 @@ describe('ProcessingView Component', () => {
     }
 
     render(<ProcessingView job={job} />)
-    expect(screen.getAllByText('35%').length).toBeGreaterThan(0)
+    expect(screen.getByText('Estimated 35%')).toBeInTheDocument()
     expect(screen.getAllByText('Transcribing speech with AI').length).toBeGreaterThan(0)
     expect(screen.getByText('Stage 4 of 9')).toBeInTheDocument()
   })

@@ -17,6 +17,10 @@ from app.services.acceleration_service import (
     HardwareAccelerationService,
     default_acceleration_service,
 )
+from app.services.media_executable_config import (
+    resolve_ffmpeg_executable,
+    resolve_ffprobe_executable,
+)
 
 
 @dataclass(frozen=True)
@@ -74,11 +78,12 @@ class MediaToolsService:
         Returns:
             MediaToolsReport: Structured availability for ffmpeg, ffprobe, yt-dlp, and acceleration.
         """
-        ffmpeg_status = self.check_tool(self.FFMPEG_CMD)
-        ffmpeg_bin = ffmpeg_status.path or self.FFMPEG_CMD
+        ffmpeg_bin = resolve_ffmpeg_executable()
+        ffprobe_bin = resolve_ffprobe_executable()
+        ffmpeg_status = self.check_tool(ffmpeg_bin)
         return MediaToolsReport(
             ffmpeg=ffmpeg_status,
-            ffprobe=self.check_tool(self.FFPROBE_CMD),
+            ffprobe=self.check_tool(ffprobe_bin),
             yt_dlp=self.check_tool(self.YT_DLP_CMD),
             acceleration=self.acceleration_service.get_acceleration_report(ffmpeg_executable=ffmpeg_bin),
         )

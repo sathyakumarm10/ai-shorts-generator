@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi } from 'vitest'
 import { EmptyState } from '../components/ui/EmptyState'
 import { LoadingState } from '../components/ui/LoadingState'
@@ -68,7 +68,7 @@ describe('ErrorState Component', () => {
 })
 
 describe('Sidebar Component Navigation', () => {
-  it('renders navigation buttons and triggers selection callback', () => {
+  it('renders navigation buttons and triggers selection callback', async () => {
     const onSelectTab = vi.fn()
     const onOpenAuth = vi.fn()
 
@@ -82,6 +82,7 @@ describe('Sidebar Component Navigation', () => {
         />
       </AuthProvider>
     )
+    await act(async () => {})
 
     expect(screen.getByText('AI Shorts')).toBeInTheDocument()
     expect(screen.getByText('Dashboard')).toBeInTheDocument()
@@ -154,5 +155,36 @@ describe('ShortGrid Multi-Short Rendering', () => {
     expect(screen.getByText('Short #1')).toBeInTheDocument()
     expect(screen.getByText('Short #4')).toBeInTheDocument()
     expect(screen.getByText('Highlight Moment #1')).toBeInTheDocument()
+  })
+
+  it('shows pipeline warnings and failed clips while keeping successful clips usable', () => {
+    const successful = {
+      index: 1,
+      final_file_path: 'jobs/job/vertical/short.mp4',
+      vertical_clip_path: 'jobs/job/vertical/short.mp4',
+      captions_present: false,
+      warnings: ['Caption rendering failed; the uncaptioned video is available.'],
+      candidate: { start_seconds: 0, end_seconds: 30, duration_seconds: 30, title: 'Usable clip', score: { overall: .9 } },
+    }
+    const failedCandidate = { start_seconds: 35, end_seconds: 65, duration_seconds: 30, title: 'Failed clip', score: { overall: .8 } }
+    render(<ShortGrid result={{
+      generated_shorts: [successful],
+      candidates: [successful.candidate, failedCandidate],
+      completion_state: 'warning',
+      highlight_method: 'heuristic_fallback',
+      warnings: ['One requested clip failed.'],
+      clip_outcomes: [
+        { index: 1, candidate: successful.candidate, status: 'warning', stage: 'captions', message: 'Caption rendering failed.' },
+        { index: 2, candidate: failedCandidate, status: 'failure', stage: 'vertical_render', message: 'Vertical rendering failed for this clip.' },
+      ],
+    }} onReset={() => {}} />)
+
+    expect(screen.getByText('Completed with warnings')).toBeInTheDocument()
+    expect(screen.getByText('One requested clip failed.')).toBeInTheDocument()
+    expect(screen.getByText('Caption rendering failed; the uncaptioned video is available.')).toBeInTheDocument()
+    expect(screen.getByText('Short Generation Failed')).toBeInTheDocument()
+    expect(screen.getByText('Vertical rendering failed for this clip.')).toBeInTheDocument()
+    expect(screen.getByText('Heuristic highlight fallback')).toBeInTheDocument()
+    expect(screen.getByLabelText('Download Short #1')).toBeInTheDocument()
   })
 })

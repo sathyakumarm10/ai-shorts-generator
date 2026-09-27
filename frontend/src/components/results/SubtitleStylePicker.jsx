@@ -7,10 +7,13 @@ const STYLES = [
   { id: 'minimal', label: 'Minimal', icon: Minus, description: 'Subtle lower-third styling' },
 ]
 
-export function SubtitleStylePicker({ currentStyle = 'default', onSelectStyle }) {
+export function SubtitleStylePicker({ currentStyle = 'default', onSelectStyle, renderedStyle = 'default' }) {
   return (
-    <div className="subtitle-style-picker" aria-label="Subtitle Style Presets">
-      <label className="style-picker-label">Subtitle Style</label>
+    <div className="subtitle-style-picker" aria-label="Subtitle Preview Styles">
+      <label className="style-picker-label">Preview Style</label>
+      <p className="setting-helper">
+        Preview only. Exported video remains rendered with {renderedStyle || 'default'} captions.
+      </p>
       <div className="style-picker-options" role="radiogroup">
         {STYLES.map((style) => {
           const Icon = style.icon

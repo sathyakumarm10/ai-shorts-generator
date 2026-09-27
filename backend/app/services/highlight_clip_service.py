@@ -85,7 +85,9 @@ class HighlightClipService:
 
         selected_candidates = candidates[:max_clips_int]
         generated_clips: List[GeneratedHighlightClip] = []
+        failure_messages: List[str] = []
 
+        failures = 0
         for clip_idx, candidate in enumerate(selected_candidates, start=1):
             # Construct VideoClipRequest without modifying candidate values
             try:
@@ -93,31 +95,41 @@ class HighlightClipService:
                     start_seconds=candidate.start_seconds,
                     duration_seconds=candidate.duration_seconds,
                 )
-            except Exception as exc:
-                raise HighlightClipError(
-                    f"Failed to construct VideoClipRequest from candidate ({candidate.start_seconds}s - {candidate.end_seconds}s): {exc}"
-                ) from exc
+            except Exception:
+                failures += 1
+                failure_messages.append("Failed to construct a clip request.")
+                continue
 
             # Render clip via existing VideoClipService with index-based naming
             try:
                 custom_filename = f"clip_{clip_idx:03d}.mp4"
                 ingested_clip = self.video_clip_service.create_clip(video, clip_request, output_filename=custom_filename)
-            except VideoClipError as exc:
-                raise HighlightClipError(f"Video clip generation failed for candidate: {exc}") from exc
-            except Exception as exc:
-                raise HighlightClipError(f"Unexpected error during video clipping: {exc}") from exc
+            except VideoClipError:
+                failures += 1
+                failure_messages.append("Video clip generation failed for candidate.")
+                continue
+            except Exception:
+                failures += 1
+                failure_messages.append("Unexpected error during video clipping.")
+                continue
 
             # Verify rendered output file
             output_file = Path(ingested_clip.file_path)
             if not output_file.is_file():
-                raise HighlightClipError(f"Generated clip file does not exist on disk: {output_file}")
+                failures += 1
+                failure_messages.append("Generated clip file does not exist on disk.")
+                continue
 
             try:
                 file_size = output_file.stat().st_size
                 if file_size <= 0:
-                    raise HighlightClipError(f"Generated clip file is empty (0 bytes): {output_file}")
-            except OSError as exc:
-                raise HighlightClipError(f"Could not verify generated clip file size: {exc}") from exc
+                    failures += 1
+                    failure_messages.append("Generated clip file is empty.")
+                    continue
+            except OSError:
+                failures += 1
+                failure_messages.append("Generated clip file could not be inspected.")
+                continue
 
             generated_clips.append(
                 GeneratedHighlightClip(
@@ -125,5 +137,8 @@ class HighlightClipService:
                     file_path=str(output_file),
                 )
             )
+
+        if failures and not generated_clips:
+            raise HighlightClipError(failure_messages[0] if failure_messages else "All candidate clip renders failed.")
 
         return generated_clips

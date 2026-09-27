@@ -85,8 +85,11 @@ export function JobHistoryModal({ isOpen, onClose, history, onSelectJob, onClear
               onClick={onClearHistory}
               style={{ marginTop: '1rem', alignSelf: 'flex-start', fontSize: '0.85rem' }}
             >
-              Clear Project History
+              Clear Browser History
             </button>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              This only clears this browser's list. Backend jobs and generated media are not deleted.
+            </p>
           </div>
         )}
       </div>

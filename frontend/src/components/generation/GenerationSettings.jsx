@@ -1,6 +1,13 @@
 import React from 'react'
 import { Sliders, Sparkles, Subtitles, Layers, Clock, Info } from 'lucide-react'
 
+export const CAPTION_PRESETS = [
+  { id: 'default', name: 'Clean Dynamic', desc: 'Minimal clean captions' },
+  { id: 'punch_pop', name: 'MrBeast', desc: 'High energy bold titles' },
+  { id: 'clean_creator', name: 'Ali Abdaal', desc: 'Sleek minimalist captions' },
+  { id: 'word_highlight', name: 'Hormozi', desc: 'Bold active-word highlights' },
+]
+
 export function GenerationSettings({
   settings,
   onChange,
@@ -117,12 +124,7 @@ export function GenerationSettings({
               </span>
             </div>
             <div className="preset-selector-grid">
-              {[
-                { id: 'default', name: 'Clean Dynamic', desc: 'Minimal clean captions' },
-                { id: 'beast', name: 'MrBeast', desc: 'High energy bold titles' },
-                { id: 'ali', name: 'Ali Abdaal', desc: 'Sleek pastel minimalist' },
-                { id: 'hormozi', name: 'Hormozi', desc: 'Ultra-bold vibrant text' },
-              ].map((preset) => (
+              {CAPTION_PRESETS.map((preset) => (
                 <button
                   key={preset.id}
                   type="button"

@@ -142,6 +142,7 @@ class TestShortsGenerationServiceUnit:
         mock_vertical = MagicMock()
         mock_caption = MagicMock()
         mock_caption_burn = MagicMock()
+        mock_output_validation = MagicMock()
 
         # Wire default return values
         mock_ingestion.ingest.return_value = IngestedVideo(file_path=str(tmp_path / "ingested.mp4"))
@@ -176,6 +177,7 @@ class TestShortsGenerationServiceUnit:
             vertical_video_service=mock_vertical,
             caption_service=mock_caption,
             caption_burn_service=mock_caption_burn,
+            output_validation_service=mock_output_validation,
         )
 
         return service, {
@@ -187,6 +189,7 @@ class TestShortsGenerationServiceUnit:
             "vertical": mock_vertical,
             "caption": mock_caption,
             "caption_burn": mock_caption_burn,
+            "output_validation": mock_output_validation,
         }
 
     def test_full_pipeline_orchestration_success(self, mock_services):
@@ -242,15 +245,14 @@ class TestShortsGenerationServiceUnit:
         assert seg.end_seconds == 35.0
         assert seg.text == "Amazing secret strategy!"
 
-    def test_empty_candidates_returns_empty_shorts_list(self, mock_services):
+    def test_empty_candidates_fails_pipeline(self, mock_services):
         service, mocks = mock_services
         mocks["scoring"].generate_candidates.return_value = []
         source = VideoSource(type=VideoSourceType.UPLOAD, location="my_video.mp4")
 
-        result = service.generate(source=source)
+        with pytest.raises(ShortsGenerationError, match="No highlight clips could be selected"):
+            service.generate(source=source)
 
-        assert result.candidates == []
-        assert result.generated_shorts == []
         mocks["clip"].generate_clips.assert_not_called()
 
     def test_ingestion_error_translated_to_shorts_generation_error(self, mock_services):

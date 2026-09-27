@@ -25,6 +25,7 @@ from app.services.highlight_clip_service import HighlightClipService
 from app.services.highlight_scoring_service import HighlightScoringService
 from app.services.job_runner_service import JobRunnerService
 from app.services.job_service import JobService
+from app.services.media_executable_config import resolve_ffmpeg_executable, resolve_ffprobe_executable
 from app.services.shorts_generation_service import ShortsGenerationService
 from app.services.transcription_service import TranscriptionProvider, TranscriptionService
 from app.services.vertical_video_service import VerticalVideoService
@@ -46,10 +47,12 @@ class DeterministicMockTranscriptionProvider(TranscriptionProvider):
 class TestJobPipelineRealIntegration:
     def test_background_job_pipeline_execution_to_completion(self, tmp_path: Path):
         """Submit and poll a background Shorts generation job to verify full lifecycle."""
-        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
-        ffprobe_bin = shutil.which("ffprobe") or "ffprobe"
+        ffmpeg_bin = resolve_ffmpeg_executable()
+        ffprobe_bin = resolve_ffprobe_executable()
 
-        if not shutil.which(ffmpeg_bin) or not shutil.which(ffprobe_bin):
+        if not (Path(ffmpeg_bin).is_file() or shutil.which(ffmpeg_bin)) or not (
+            Path(ffprobe_bin).is_file() or shutil.which(ffprobe_bin)
+        ):
             pytest.skip("FFmpeg and/or ffprobe are not available on the system.")
 
         # 1. Create a 70-second synthetic source video (1280x720) with audio
@@ -165,7 +168,7 @@ class TestJobPipelineRealIntegration:
         assert len(completed_job.result.generated_shorts) == 1
 
         short = completed_job.result.generated_shorts[0]
-        final_video_path = Path(short.final_file_path)
+        final_video_path = job_runner.media_storage.resolve_media_path(short.final_file_path)
         assert final_video_path.is_file()
         assert final_video_path.stat().st_size > 1000
 

@@ -16,6 +16,7 @@ import pytest
 
 from app.models import IngestedVideo, VideoClipRequest
 from app.services.media_tools_service import MediaToolsService
+from app.services.media_executable_config import resolve_ffmpeg_executable
 from app.services.video_clip_service import VideoClipService
 from app.services.video_metadata_service import VideoMetadataService
 
@@ -36,7 +37,7 @@ def _create_synthetic_video(output_path, duration_seconds: int = 40):
     Creates a 640x360 test pattern with synthesized test audio tone
     using FFmpeg's built-in `testsrc` and `sine` filters.
     """
-    ffmpeg_cmd = shutil.which("ffmpeg") or "ffmpeg"
+    ffmpeg_cmd = resolve_ffmpeg_executable()
     cmd = [
         ffmpeg_cmd,
         "-y",

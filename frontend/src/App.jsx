@@ -12,8 +12,17 @@ import { AuthModal } from './components/AuthModal'
 import { uploadVideo, createJob, getJob, listJobs } from './api/client'
 import { AuthProvider, useAuth } from './context/AuthContext'
 
-const STORAGE_KEY = 'ai_shorts_generator_history_v1'
-const ACTIVE_JOB_KEY = 'ai_shorts_active_job_id'
+const HISTORY_STORAGE_PREFIX = 'ai_shorts_generator_history_v1'
+const ACTIVE_JOB_STORAGE_PREFIX = 'ai_shorts_active_job_id'
+const MAX_CONSECUTIVE_POLL_FAILURES = 3
+
+export function getHistoryStorageKeys(user) {
+  const ownerScope = user?.user_id ? `user:${user.user_id}` : 'anonymous'
+  return {
+    historyKey: `${HISTORY_STORAGE_PREFIX}:${ownerScope}`,
+    activeJobKey: `${ACTIVE_JOB_STORAGE_PREFIX}:${ownerScope}`,
+  }
+}
 
 function getJobState(job) {
   if (!job) return 'idle'
@@ -49,11 +58,20 @@ function MainApp() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
   const [isAuthOpen, setIsAuthOpen] = useState(false)
 
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
+  const { historyKey, activeJobKey } = getHistoryStorageKeys(user)
   const pollingRef = useRef(null)
+  const pollingFailuresRef = useRef(0)
 
   // Load history and restore active job on mount or refresh
   useEffect(() => {
+    if (authLoading) return undefined
+
+    setHistory([])
+    setCurrentJob(null)
+    setJobState('idle')
+    setError(null)
+
     async function initJobs() {
       let loadedJobs = []
 
@@ -72,7 +90,7 @@ function MainApp() {
 
       // 2. Load stored local history
       try {
-        const stored = localStorage.getItem(STORAGE_KEY)
+        const stored = localStorage.getItem(historyKey)
         if (stored) {
           const parsedHistory = JSON.parse(stored)
           if (Array.isArray(parsedHistory) && parsedHistory.length > 0) {
@@ -87,7 +105,7 @@ function MainApp() {
       }
 
       // 3. Restore persisted active job ID if present
-      const persistedActiveJobId = localStorage.getItem(ACTIVE_JOB_KEY)
+      const persistedActiveJobId = localStorage.getItem(activeJobKey)
       if (persistedActiveJobId) {
         try {
           const fetchedJob = await getJob(persistedActiveJobId)
@@ -111,13 +129,14 @@ function MainApp() {
         if (inProgress) {
           setCurrentJob(inProgress)
           setJobState(getJobState(inProgress))
-          localStorage.setItem(ACTIVE_JOB_KEY, inProgress.job_id)
+          localStorage.setItem(activeJobKey, inProgress.job_id)
         }
       }
     }
 
     initJobs()
-  }, [user])
+    return undefined
+  }, [user, authLoading, historyKey, activeJobKey])
 
   // Save history to localStorage
   const saveToHistory = (jobRecord, sourceName) => {
@@ -138,7 +157,7 @@ function MainApp() {
       }
 
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextList))
+        localStorage.setItem(historyKey, JSON.stringify(nextList))
       } catch {
         // Storage quota exceed fallback
       }
@@ -173,8 +192,10 @@ function MainApp() {
   }
 
   const handleReset = () => {
-    if (pollingRef.current) clearInterval(pollingRef.current)
-    localStorage.removeItem(ACTIVE_JOB_KEY)
+    if (pollingRef.current) clearTimeout(pollingRef.current)
+    pollingRef.current = null
+    pollingFailuresRef.current = 0
+    localStorage.removeItem(activeJobKey)
     setJobState('idle')
     setCurrentJob(null)
     setError(null)
@@ -189,17 +210,17 @@ function MainApp() {
     if (isSubmitting || isUploading) return // Prevent duplicate submissions
 
     if (sourceType === 'upload') {
-      if (!uploadedData?.file_path) {
+      if (!uploadedData?.asset_id) {
         setError('Please select and upload a valid video file first.')
         return
       }
     } else {
       if (!videoUrl || !videoUrl.trim()) {
-        setError('Please enter a valid video stream or YouTube URL.')
+        setError('Please enter a valid YouTube URL.')
         return
       }
       if (!/^https?:\/\//i.test(videoUrl.trim())) {
-        setError('Video URL must begin with http:// or https://')
+        setError('YouTube URL must begin with http:// or https://')
         return
       }
     }
@@ -210,7 +231,9 @@ function MainApp() {
     const payload = {
       source: {
         type: sourceType === 'upload' ? 'upload' : 'youtube',
-        location: sourceType === 'upload' ? uploadedData.file_path : videoUrl.trim(),
+        ...(sourceType === 'upload'
+          ? { asset_id: uploadedData.asset_id }
+          : { location: videoUrl.trim() }),
       },
       clip_duration_seconds: Number(settings.clipDurationSeconds) || 60,
       number_of_clips: Math.min(15, Math.max(1, Number(settings.numberOfClips) || 10)),
@@ -227,8 +250,8 @@ function MainApp() {
       const job = await createJob(payload)
       setCurrentJob(job)
       setJobState('processing')
-      localStorage.setItem(ACTIVE_JOB_KEY, job.job_id)
-      saveToHistory(job, selectedFile?.name || (videoUrl ? 'Web Video' : 'Generated Short'))
+      localStorage.setItem(activeJobKey, job.job_id)
+      saveToHistory(job, selectedFile?.name || (videoUrl ? 'YouTube Video' : 'Generated Short'))
     } catch (err) {
       setError(err.message || 'Failed to start shorts generation job.')
     } finally {
@@ -239,39 +262,60 @@ function MainApp() {
   // Polling loop for active jobs
   useEffect(() => {
     if (jobState !== 'processing' || !currentJob?.job_id) {
-      if (pollingRef.current) clearInterval(pollingRef.current)
+      if (pollingRef.current) clearTimeout(pollingRef.current)
+      pollingRef.current = null
       return
     }
 
+    let disposed = false
     const poll = async () => {
+      let shouldContinue = true
       try {
         const latestJob = await getJob(currentJob.job_id)
+        if (disposed) return
+        if (pollingFailuresRef.current >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          setError(null)
+        }
+        pollingFailuresRef.current = 0
         setCurrentJob(latestJob)
         saveToHistory(latestJob, selectedFile?.name)
 
         if (latestJob.status === 'completed') {
           setJobState('results')
-          clearInterval(pollingRef.current)
+          localStorage.removeItem(activeJobKey)
+          shouldContinue = false
         } else if (latestJob.status === 'failed') {
           setJobState('failed')
           setError(latestJob.error || 'Job failed during video processing')
-          clearInterval(pollingRef.current)
+          localStorage.removeItem(activeJobKey)
+          shouldContinue = false
         }
-      } catch {
-        // Network blip; continue polling
+      } catch (err) {
+        if (disposed) return
+        pollingFailuresRef.current += 1
+        if (pollingFailuresRef.current >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          setError(err?.message || 'Unable to refresh job status. Retrying in the background.')
+        }
+      } finally {
+        if (!disposed && shouldContinue) {
+          pollingRef.current = setTimeout(poll, 1800)
+        } else {
+          pollingRef.current = null
+        }
       }
     }
 
     poll()
-    pollingRef.current = setInterval(poll, 1800)
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current)
+      disposed = true
+      if (pollingRef.current) clearTimeout(pollingRef.current)
+      pollingRef.current = null
     }
-  }, [jobState, currentJob?.job_id])
+  }, [jobState, currentJob?.job_id, activeJobKey])
 
   const handleSelectHistoryJob = async (jobItem) => {
     if (!jobItem || !jobItem.job_id) return
-    localStorage.setItem(ACTIVE_JOB_KEY, jobItem.job_id)
+    localStorage.setItem(activeJobKey, jobItem.job_id)
     setIsHistoryOpen(false)
 
     try {
@@ -287,8 +331,8 @@ function MainApp() {
   }
 
   const handleClearHistory = () => {
-    localStorage.removeItem(STORAGE_KEY)
-    localStorage.removeItem(ACTIVE_JOB_KEY)
+    localStorage.removeItem(historyKey)
+    localStorage.removeItem(activeJobKey)
     setHistory([])
   }
 
@@ -315,7 +359,7 @@ function MainApp() {
         <ErrorState
           title="Operation Failed"
           message={error}
-          onRetry={jobState === 'failed' ? handleReset : null}
+          onRetry={null}
           onDismiss={() => setError(null)}
         />
       )}
@@ -324,7 +368,7 @@ function MainApp() {
       {jobState === 'processing' && (
         <GenerationProgress
           job={currentJob}
-          onCancel={handleReset}
+          onStartOver={handleReset}
         />
       )}
 

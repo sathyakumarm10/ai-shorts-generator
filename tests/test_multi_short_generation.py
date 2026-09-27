@@ -294,6 +294,7 @@ class TestMultiShortGenerationService:
             highlight_clip_service=mock_clip_svc,
             vertical_video_service=mock_vert_svc,
             caption_burn_service=mock_caption_burn,
+            output_validation_service=MagicMock(),
         )
 
         request = ShortsGenerationRequest(
@@ -396,6 +397,7 @@ class TestMultiShortGenerationService:
             highlight_clip_service=mock_clip_svc,
             vertical_video_service=mock_vert_svc,
             caption_burn_service=mock_caption_burn,
+            output_validation_service=MagicMock(),
         )
 
         result = service.generate(
@@ -458,6 +460,7 @@ class TestMultiShortGenerationService:
             highlight_scoring_service=mock_scoring,
             highlight_clip_service=mock_clip_svc,
             vertical_video_service=mock_vert_svc,
+            output_validation_service=MagicMock(),
         )
 
         with pytest.raises(ShortsGenerationError, match="All candidate short rendering attempts failed"):
@@ -733,6 +736,10 @@ class TestRelativePathAndPersistence:
 
     def test_api_jobs_endpoint_returns_all_generated_shorts(self, test_client):
         from app.services.job_service import default_job_service
+        from app.services.media_access_service import (
+            MEDIA_ACCESS_COOKIE,
+            create_media_access_token,
+        )
 
         now = datetime.now(timezone.utc)
         score_val = HighlightScore(
@@ -743,6 +750,7 @@ class TestRelativePathAndPersistence:
             information_density=0.8,
         )
         job_id = f"job-api-{uuid4().hex[:8]}"
+        owner_id = f"anonymous:{uuid4()}"
         shorts = [
             GeneratedShort(
                 index=i,
@@ -768,6 +776,7 @@ class TestRelativePathAndPersistence:
             created_at=now,
             started_at=now,
             completed_at=now,
+            user_id=owner_id,
             result=ShortsGenerationResult(
                 source_video=IngestedVideo(file_path="source.mp4"),
                 metadata=VideoMetadata(
@@ -784,6 +793,11 @@ class TestRelativePathAndPersistence:
         )
 
         default_job_service._store.insert(job)
+        test_client.cookies.set(
+            MEDIA_ACCESS_COOKIE,
+            create_media_access_token(owner_id),
+            path="/api",
+        )
 
         response = test_client.get(f"/api/jobs/{job_id}")
         assert response.status_code == 200

@@ -7,12 +7,12 @@ timestamped transcript segments for downstream highlight analysis.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 from typing import Optional
 
 from app.models import IngestedVideo, TimestampedTranscript, TranscriptSegment
+from app.services.media_executable_config import resolve_ffmpeg_executable
 
 
 class TranscriptionError(Exception):
@@ -236,7 +236,7 @@ class TranscriptionService:
     def __init__(
         self,
         provider: Optional[TranscriptionProvider] = None,
-        ffmpeg_executable: str = "ffmpeg",
+        ffmpeg_executable: Optional[str] = None,
     ) -> None:
         self.provider = provider or PlaceholderTranscriptionProvider()
         self.ffmpeg_executable = ffmpeg_executable
@@ -261,7 +261,7 @@ class TranscriptionService:
         if not video_path.is_file():
             raise TranscriptionError(f"Video file not found: {video_path}")
 
-        executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable
+        executable = resolve_ffmpeg_executable(self.ffmpeg_executable)
 
         cmd = [
             executable,

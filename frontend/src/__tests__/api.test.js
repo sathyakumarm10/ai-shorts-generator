@@ -25,7 +25,7 @@ describe('API Client Layer', () => {
 
   it('uploadVideo sends FormData and returns response json', async () => {
     const mockFile = new File(['test'], 'test.mp4', { type: 'video/mp4' })
-    const mockResp = { file_path: '/server/path.mp4', filename: 'test.mp4', file_size_bytes: 4 }
+    const mockResp = { asset_id: 'opaque_asset_id_1234567890123456', filename: 'test.mp4', file_size_bytes: 4 }
 
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -49,7 +49,7 @@ describe('API Client Layer', () => {
   })
 
   it('createJob sends JSON payload and returns JobRecord', async () => {
-    const payload = { source: { type: 'upload', location: '/path.mp4' }, clip_duration_seconds: 30 }
+    const payload = { source: { type: 'upload', asset_id: 'opaque_asset_id_1234567890123456' }, clip_duration_seconds: 30 }
     const mockJob = { job_id: 'job-abc', status: 'queued', progress_percent: 0 }
 
     global.fetch = vi.fn().mockResolvedValue({

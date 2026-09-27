@@ -60,22 +60,34 @@ services:
       - PORT=8000
       - HOST=0.0.0.0
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
-      - AUTH_JWT_SECRET=${AUTH_JWT_SECRET:-dev-insecure-secret-key-change-in-production-1234567890}
+      - MAX_UPLOAD_SIZE_BYTES=${MAX_UPLOAD_SIZE_BYTES:-1073741824}
+      - UPLOAD_DIR=${UPLOAD_DIR:-/app/downloads/uploads}
+      - MEDIA_ROOT=${MEDIA_ROOT:-/app/outputs}
+      - AUTH_JWT_SECRET=${AUTH_JWT_SECRET:?Set AUTH_JWT_SECRET before starting the backend}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS:-30}
       - PBKDF2_ITERATIONS=${PBKDF2_ITERATIONS:-100000}
+      - MEDIA_COOKIE_SECURE=${MEDIA_COOKIE_SECURE:-false}
       # Database backend: "postgres" uses the postgres service; "sqlite" uses local file fallback
       - DATABASE_BACKEND=${DATABASE_BACKEND:-postgres}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-ai_shorts}:${POSTGRES_PASSWORD:-ai_shorts_password}@postgres:5432/${POSTGRES_DB:-ai_shorts}
+      - DB_ENABLE_LOCAL_FALLBACK=${DB_ENABLE_LOCAL_FALLBACK:-true}
+      - DB_POOL_MIN_SIZE=${DB_POOL_MIN_SIZE:-2}
+      - DB_POOL_MAX_SIZE=${DB_POOL_MAX_SIZE:-10}
+      - DB_CONNECT_TIMEOUT=${DB_CONNECT_TIMEOUT:-5.0}
       # Legacy SQLite paths (used as fallback when postgres is unavailable)
       - JOB_DB_PATH=/app/data/jobs.sqlite3
       - USER_DB_PATH=/app/data/users.sqlite3
       # Queue backend: "redis" uses the redis service; "threadpool" uses in-process fallback
       - QUEUE_BACKEND=${QUEUE_BACKEND:-redis}
       - REDIS_URL=redis://redis:6379/0
-      - JOB_QUEUE_NAME=${JOB_QUEUE_NAME:-ai_shorts_jobs}
+      - JOB_QUEUE_NAME=${JOB_QUEUE_NAME:-ai_shorts:jobs}
       - JOB_QUEUE_MAX_RETRIES=${JOB_QUEUE_MAX_RETRIES:-3}
       - JOB_QUEUE_RETRY_DELAY_SECONDS=${JOB_QUEUE_RETRY_DELAY_SECONDS:-30}
-      - JOB_QUEUE_VISIBILITY_TIMEOUT_SECONDS=${JOB_QUEUE_VISIBILITY_TIMEOUT_SECONDS:-300}
+      - JOB_QUEUE_VISIBILITY_TIMEOUT=${JOB_QUEUE_VISIBILITY_TIMEOUT:-300}
+      - JOB_QUEUE_STALE_SWEEP_INTERVAL=${JOB_QUEUE_STALE_SWEEP_INTERVAL:-60}
+      - QUEUE_ENABLE_LOCAL_FALLBACK=${QUEUE_ENABLE_LOCAL_FALLBACK:-true}
+      - QUEUE_THREADPOOL_WORKERS=${QUEUE_THREADPOOL_WORKERS:-4}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - AI_API_BASE=${AI_API_BASE:-https://openrouter.ai/api/v1}
@@ -95,6 +107,8 @@ services:
       - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-auto}
       - FFMPEG_ACCELERATION=${FFMPEG_ACCELERATION:-auto}
+      - FFMPEG_PATH=${FFMPEG_PATH:-ffmpeg}
+      - FFPROBE_PATH=${FFPROBE_PATH:-ffprobe}
     volumes:
       # Persistent SQLite databases (fallback / dev)
       - ai_shorts_data:/app/data
@@ -131,16 +145,25 @@ services:
     restart: unless-stopped
     command: ["python", "-m", "app.worker"]
     environment:
+      - UPLOAD_DIR=${UPLOAD_DIR:-/app/downloads/uploads}
+      - MEDIA_ROOT=${MEDIA_ROOT:-/app/outputs}
       - DATABASE_BACKEND=${DATABASE_BACKEND:-postgres}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-ai_shorts}:${POSTGRES_PASSWORD:-ai_shorts_password}@postgres:5432/${POSTGRES_DB:-ai_shorts}
+      - DB_ENABLE_LOCAL_FALLBACK=${DB_ENABLE_LOCAL_FALLBACK:-true}
+      - DB_POOL_MIN_SIZE=${DB_POOL_MIN_SIZE:-2}
+      - DB_POOL_MAX_SIZE=${DB_POOL_MAX_SIZE:-10}
+      - DB_CONNECT_TIMEOUT=${DB_CONNECT_TIMEOUT:-5.0}
       - JOB_DB_PATH=/app/data/jobs.sqlite3
       - USER_DB_PATH=/app/data/users.sqlite3
       - QUEUE_BACKEND=${QUEUE_BACKEND:-redis}
       - REDIS_URL=redis://redis:6379/0
-      - JOB_QUEUE_NAME=${JOB_QUEUE_NAME:-ai_shorts_jobs}
+      - JOB_QUEUE_NAME=${JOB_QUEUE_NAME:-ai_shorts:jobs}
       - JOB_QUEUE_MAX_RETRIES=${JOB_QUEUE_MAX_RETRIES:-3}
       - JOB_QUEUE_RETRY_DELAY_SECONDS=${JOB_QUEUE_RETRY_DELAY_SECONDS:-30}
-      - JOB_QUEUE_VISIBILITY_TIMEOUT_SECONDS=${JOB_QUEUE_VISIBILITY_TIMEOUT_SECONDS:-300}
+      - JOB_QUEUE_VISIBILITY_TIMEOUT=${JOB_QUEUE_VISIBILITY_TIMEOUT:-300}
+      - JOB_QUEUE_STALE_SWEEP_INTERVAL=${JOB_QUEUE_STALE_SWEEP_INTERVAL:-60}
+      - QUEUE_ENABLE_LOCAL_FALLBACK=${QUEUE_ENABLE_LOCAL_FALLBACK:-true}
+      - QUEUE_THREADPOOL_WORKERS=${QUEUE_THREADPOOL_WORKERS:-4}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - AI_API_BASE=${AI_API_BASE:-https://openrouter.ai/api/v1}
@@ -152,11 +175,16 @@ services:
       - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
       - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
       - S3_PUBLIC_BASE_URL=${S3_PUBLIC_BASE_URL:-}
+      - S3_PRESIGNED_EXPIRY=${S3_PRESIGNED_EXPIRY:-3600}
+      - STORAGE_MAX_RETRIES=${STORAGE_MAX_RETRIES:-3}
+      - STORAGE_ENABLE_LOCAL_FALLBACK=${STORAGE_ENABLE_LOCAL_FALLBACK:-true}
       - HF_HOME=/app/model_cache
       - ACCELERATION_DEVICE=${ACCELERATION_DEVICE:-auto}
       - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-auto}
       - FFMPEG_ACCELERATION=${FFMPEG_ACCELERATION:-auto}
+      - FFMPEG_PATH=${FFMPEG_PATH:-ffmpeg}
+      - FFPROBE_PATH=${FFPROBE_PATH:-ffprobe}
     volumes:
       - ai_shorts_data:/app/data
       - ai_shorts_outputs:/app/outputs

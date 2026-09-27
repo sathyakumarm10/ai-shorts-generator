@@ -223,7 +223,9 @@ class TestTranscriptionService:
         import shutil
         import subprocess
 
-        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+        from app.services.media_executable_config import resolve_ffmpeg_executable
+
+        ffmpeg_bin = resolve_ffmpeg_executable()
         test_video = tmp_path / "synthetic_test.mp4"
 
         # Generate a minimal 1-second synthetic test video with sine audio
@@ -488,5 +490,4 @@ class TestFasterWhisperRealIntegration:
         assert any(word in full_text for word in ["hello", "this", "test", "speech", "recognition"]), (
             f"Recognized text '{full_text}' did not match expected spoken words."
         )
-
 

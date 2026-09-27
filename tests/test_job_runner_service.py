@@ -32,7 +32,10 @@ from app.services.shorts_generation_service import ShortsGenerationError, Shorts
 
 def make_test_request() -> ShortsGenerationRequest:
     return ShortsGenerationRequest(
-        source=VideoSource(type=VideoSourceType.UPLOAD, location="sample_video.mp4"),
+        source=VideoSource(
+            type=VideoSourceType.YOUTUBE,
+            location="https://www.youtube.com/watch?v=example",
+        ),
         clip_duration_seconds=45.0,
         number_of_clips=1,
     )

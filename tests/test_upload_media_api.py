@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.media_asset_service import default_media_asset_service
 
 client = TestClient(app)
 
@@ -19,11 +20,14 @@ def test_upload_video_valid_mp4(tmp_path):
     assert response.status_code == 200
     body = response.json()
 
-    assert "file_path" in body
+    assert "asset_id" in body
+    assert "file_path" not in body
     assert body["filename"] == "my_sample.mp4"
     assert body["file_size_bytes"] == len(file_content)
 
-    uploaded_path = Path(body["file_path"])
+    asset = default_media_asset_service.get_asset(body["asset_id"])
+    assert asset is not None
+    uploaded_path = Path(asset.stored_path)
     assert uploaded_path.is_file()
 
 
@@ -42,12 +46,15 @@ def test_upload_video_empty_file_rejected():
 
 
 def test_get_media_valid_file_in_downloads():
-    download_dir = Path("downloads") / "test_media"
-    download_dir.mkdir(parents=True, exist_ok=True)
-    sample_file = download_dir / "valid_sample.mp4"
-    sample_file.write_bytes(b"sample video bytes")
+    upload = client.post(
+        "/api/upload",
+        files={"file": ("valid_sample.mp4", io.BytesIO(b"sample video bytes"), "video/mp4")},
+    )
+    assert upload.status_code == 200
 
-    response = client.get(f"/api/media?file_path={sample_file.resolve()}")
+    asset = default_media_asset_service.get_asset(upload.json()["asset_id"])
+    assert asset is not None
+    response = client.get("/api/media", params={"file_path": asset.stored_path})
     assert response.status_code == 200
     assert response.content == b"sample video bytes"
     assert "video/mp4" in response.headers.get("content-type", "")

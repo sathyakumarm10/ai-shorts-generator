@@ -24,7 +24,7 @@ const PIPELINE_STAGES = [
   { key: 'completed', label: 'Shorts Generation Complete', icon: CheckCircle2, targetPercent: 100 },
 ]
 
-export function GenerationProgress({ job, onCancel }) {
+export function GenerationProgress({ job, onStartOver }) {
   const currentStatus = (job?.status || 'queued').toLowerCase()
   const progressPercent = Math.min(100, Math.max(0, job?.progress_percent || 0))
   const message = job?.message || 'Processing your video...'
@@ -78,7 +78,7 @@ export function GenerationProgress({ job, onCancel }) {
         </div>
       </div>
 
-      <div className="progress-bar-container" aria-label={`Overall progress: ${progressPercent}%`}>
+      <div className="progress-bar-container" aria-label={`Estimated overall progress: ${progressPercent}%`}>
         <div
           className="progress-bar-fill"
           style={{ width: `${progressPercent}%` }}
@@ -87,7 +87,7 @@ export function GenerationProgress({ job, onCancel }) {
 
       <div className="progress-meta-row">
         <span>Stage {effectiveIndex + 1} of {PIPELINE_STAGES.length}</span>
-        <span className="progress-percentage-val">{Math.round(progressPercent)}%</span>
+        <span className="progress-percentage-val">Estimated {Math.round(progressPercent)}%</span>
       </div>
 
       <div className="stage-stepper">
@@ -118,22 +118,25 @@ export function GenerationProgress({ job, onCancel }) {
               </div>
 
               <div className="stage-percent-tag">
-                {stage.targetPercent}%
+                ~{stage.targetPercent}%
               </div>
             </div>
           )
         })}
       </div>
 
-      {onCancel && (
+      {onStartOver && (
         <div style={{ textAlign: 'center', marginTop: '1.5rem' }}>
+          <p className="setting-helper">
+            Starting another project only leaves this view. This job will continue processing in the background.
+          </p>
           <button
             type="button"
             className="btn-secondary"
-            onClick={onCancel}
+            onClick={onStartOver}
             style={{ fontSize: '0.85rem' }}
           >
-            Cancel or Start Over
+            Start Another Project
           </button>
         </div>
       )}

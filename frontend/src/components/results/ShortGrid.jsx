@@ -11,7 +11,19 @@ import { findActiveSegment } from '../../utils/subtitleValidation'
 export function ShortGrid({ result, jobId, onReset }) {
   const initialShorts = useMemo(() => result?.generated_shorts || [], [result])
   const candidates = result?.candidates || []
-  const skippedCount = Math.max(0, candidates.length - initialShorts.length)
+  const clipOutcomes = result?.clip_outcomes || []
+  const resultWarnings = result?.warnings || []
+  const failedOutcomeCards = useMemo(() => clipOutcomes
+    .filter((outcome) => outcome.status === 'failure')
+    .map((outcome) => ({
+      index: outcome.index,
+      candidate: outcome.candidate,
+      status: 'failed',
+      error_message: outcome.message,
+    })), [clipOutcomes])
+  const skippedCount = clipOutcomes.length
+    ? 0
+    : Math.max(0, candidates.length - initialShorts.length)
 
   // Local state for modified shorts (enabling subtitle editing & state updates)
   const [shorts, setShorts] = useState(initialShorts)
@@ -27,6 +39,7 @@ export function ShortGrid({ result, jobId, onReset }) {
     setShorts(initialShorts)
     setSelectedIndex(0)
     setCurrentTime(0)
+    setCaptionStyle(initialShorts[0]?.caption_preset || 'default')
   }, [initialShorts])
 
   // Active Short
@@ -34,7 +47,7 @@ export function ShortGrid({ result, jobId, onReset }) {
 
   // Successfully completed count
   const completedCount = shorts.filter((s) => s.status !== 'failed').length
-  const failedCount = shorts.filter((s) => s.status === 'failed').length
+  const failedCount = shorts.filter((s) => s.status === 'failed').length + failedOutcomeCards.length
 
   // Caption segments & active segment detection
   const captionSegments = activeShort?.caption_track?.segments || []
@@ -45,6 +58,7 @@ export function ShortGrid({ result, jobId, onReset }) {
     if (index >= 0 && index < shorts.length) {
       setSelectedIndex(index)
       setCurrentTime(0)
+      setCaptionStyle(shorts[index]?.caption_preset || 'default')
       if (videoRef.current) {
         videoRef.current.currentTime = 0
       }
@@ -79,7 +93,7 @@ export function ShortGrid({ result, jobId, onReset }) {
         <div>
           <div className="results-success-badge">
             <CheckCircle2 size={18} />
-            <span>Generation Complete</span>
+            <span>{result?.completion_state === 'warning' ? 'Completed with warnings' : 'Generation Complete'}</span>
           </div>
           <h2 className="results-title">Your Generated Shorts</h2>
           <p className="results-subtitle">
@@ -144,6 +158,18 @@ export function ShortGrid({ result, jobId, onReset }) {
               <strong>{skippedCount}</strong> Skipped Candidates
             </span>
           )}
+          {result?.highlight_method === 'heuristic_fallback' && (
+            <span className="summary-chip chip-neutral">Heuristic highlight fallback</span>
+          )}
+        </div>
+      )}
+
+      {resultWarnings.length > 0 && (
+        <div role="alert" style={{ marginBottom: '1.5rem', padding: '0.75rem 1rem', background: '#FFF8E7', border: '1px solid #E8C56A', borderRadius: 'var(--radius-sm)', color: '#694F10' }}>
+          <strong>Some requested processing did not complete:</strong>
+          <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.25rem' }}>
+            {resultWarnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}
+          </ul>
         </div>
       )}
 
@@ -209,6 +235,7 @@ export function ShortGrid({ result, jobId, onReset }) {
                   <SubtitleStylePicker
                     currentStyle={captionStyle}
                     onSelectStyle={setCaptionStyle}
+                    renderedStyle={activeShort.caption_preset || 'default'}
                   />
 
                   <SubtitleEditor
@@ -228,7 +255,7 @@ export function ShortGrid({ result, jobId, onReset }) {
             <div className="all-shorts-header">
               <h3 className="section-title">All Generated Clips</h3>
               <span className="section-subtitle">
-                Select any Short to inspect, edit its subtitles, or download.
+                Select any Short to inspect, preview subtitle drafts, or download the rendered video.
               </span>
             </div>
 
@@ -239,6 +266,12 @@ export function ShortGrid({ result, jobId, onReset }) {
                   short={short}
                   isSelected={idx === selectedIndex}
                   onSelect={() => handleSelectShort(idx)}
+                />
+              ))}
+              {failedOutcomeCards.map((short) => (
+                <ShortCard
+                  key={`${jobId || 'job'}-failed-${short.index}`}
+                  short={short}
                 />
               ))}
             </div>

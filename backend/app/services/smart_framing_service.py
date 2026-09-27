@@ -12,12 +12,12 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 import re
-import shutil
 import subprocess
 from typing import List, Optional, Tuple
 from uuid import uuid4
 
 from app.models import FramingType
+from app.services.media_executable_config import resolve_ffmpeg_executable
 
 
 @dataclass
@@ -71,12 +71,13 @@ class SmartFramingService:
     def __init__(
         self,
         sample_interval_seconds: float = 2.0,
-        ffmpeg_executable: str = "ffmpeg",
+        ffmpeg_executable: Optional[str] = None,
         smooth_factor: float = 0.7,
     ) -> None:
         self.sample_interval_seconds = sample_interval_seconds
         self.ffmpeg_executable = ffmpeg_executable
         self.smooth_factor = smooth_factor
+        self.last_detection_failed = False
 
     def detect_focal_points_ffmpeg(
         self,
@@ -85,10 +86,12 @@ class SmartFramingService:
     ) -> List[TimestampedFaceDetection]:
         """Sample video frames and extract prominent visual bounding boxes using FFmpeg bbox filter."""
         path = Path(video_path)
+        self.last_detection_failed = False
         if not path.is_file():
+            self.last_detection_failed = True
             return []
 
-        executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable
+        executable = resolve_ffmpeg_executable(self.ffmpeg_executable)
         # Fast sampling of visual bounding boxes
         cmd = [
             executable,
@@ -103,8 +106,12 @@ class SmartFramingService:
 
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if res.returncode != 0:
+                self.last_detection_failed = True
+                return []
             output = res.stderr
         except Exception:
+            self.last_detection_failed = True
             return []
 
         detections: List[TimestampedFaceDetection] = []

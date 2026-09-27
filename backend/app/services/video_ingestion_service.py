@@ -89,8 +89,12 @@ class VideoIngestionService:
             NotImplementedError: If ingestion for the source type is not implemented yet.
         """
         if source.type == VideoSourceType.YOUTUBE:
+            if not source.location:
+                raise VideoIngestionError("YouTube source URL is missing.")
             return self._ingest_youtube(source.location)
         elif source.type == VideoSourceType.UPLOAD:
+            if not source.location:
+                raise VideoIngestionError("Uploaded asset was not resolved to an internal file.")
             # Check if source.location refers to an existing local file
             local_path = Path(source.location)
             if local_path.is_file():

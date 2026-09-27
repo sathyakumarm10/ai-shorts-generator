@@ -103,8 +103,8 @@ class TestDatabaseDiagnosticsEndpoint:
         with patch("app.main.get_database_report", return_value=mock_report):
             data = client.get("/api/system/database").json()
             assert data["backend"] == "postgresql"
-            assert data["host"] == "postgres"
-            assert data["port"] == 5432
+            assert "host" not in data
+            assert "database_name" not in data
             assert data["migration_version"] == 3
 
     def test_degraded_postgres_has_error_field(self, client: TestClient) -> None:
@@ -127,7 +127,7 @@ class TestDatabaseDiagnosticsEndpoint:
             data = client.get("/api/system/database").json()
             assert data["connected"] is False
             assert data["local_fallback_active"] is True
-            assert "Connection refused" in (data.get("error") or "")
+            assert data["error"] == "Database unavailable."
 
 
 # ---------------------------------------------------------------------------
@@ -219,4 +219,4 @@ class TestQueueDiagnosticsEndpoint:
         with patch("app.main.get_queue_report", return_value=mock_report):
             data = client.get("/api/system/queue").json()
             assert data["connected"] is False
-            assert "ECONNREFUSED" in (data.get("error") or "")
+            assert data["error"] == "Queue unavailable."

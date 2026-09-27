@@ -13,6 +13,7 @@ import pytest
 from app.models import TimestampedTranscript, TranscriptSegment
 from app.services.caption_burn_service import CaptionBurnService
 from app.services.caption_service import CaptionService
+from app.services.media_executable_config import resolve_ffmpeg_executable, resolve_ffprobe_executable
 from app.services.vertical_video_service import VerticalVideoService
 from app.services.video_metadata_service import VideoMetadataService
 
@@ -20,10 +21,12 @@ from app.services.video_metadata_service import VideoMetadataService
 class TestCaptionBurnRealIntegration:
     def test_real_ffmpeg_caption_burn_pipeline(self, tmp_path: Path):
         """End-to-end test converting landscape video to vertical and burning styled captions."""
-        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
-        ffprobe_bin = shutil.which("ffprobe") or "ffprobe"
+        ffmpeg_bin = resolve_ffmpeg_executable()
+        ffprobe_bin = resolve_ffprobe_executable()
 
-        if not shutil.which(ffmpeg_bin) or not shutil.which(ffprobe_bin):
+        if not (Path(ffmpeg_bin).is_file() or shutil.which(ffmpeg_bin)) or not (
+            Path(ffprobe_bin).is_file() or shutil.which(ffprobe_bin)
+        ):
             pytest.skip("FFmpeg and/or ffprobe are not available on the system.")
 
         # 1. Create a 3-second 16:9 landscape test video with solid background and sine audio

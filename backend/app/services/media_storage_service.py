@@ -28,7 +28,9 @@ paths rooted outside the tree.
 """
 
 import logging
+import os
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, TYPE_CHECKING
 from uuid import uuid4
@@ -41,11 +43,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Default media root (relative to CWD at runtime; overridable via constructor).
-DEFAULT_MEDIA_ROOT = Path("outputs")
+DEFAULT_MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", "outputs"))
 
 
 class MediaStorageError(Exception):
     """Raised when a media storage or path-traversal violation occurs."""
+
+
+@dataclass
+class CloudSyncReport:
+    """Outcome of optional cloud synchronization."""
+
+    attempted: bool = False
+    required: bool = False
+    uploaded: Dict[str, str] = field(default_factory=dict)
+    failure_count: int = 0
 
 
 class MediaStorageService:
@@ -262,31 +274,41 @@ class MediaStorageService:
                 pass
         return f"/api/media?path={rel}"
 
-    def sync_job_to_cloud(self, job_id: str) -> Dict[str, str]:
+    def sync_job_to_cloud(self, job_id: str) -> CloudSyncReport:
         """Upload all generated media artifacts for job_id to cloud storage.
 
         Returns
         -------
-        Dict[str, str]
-            Map of relative paths to cloud storage URLs.
+        CloudSyncReport
+            Upload URLs plus whether synchronization was attempted, required,
+            or partially failed.
         """
         self._validate_job_id(job_id)
         job_dir = self.media_root / "jobs" / job_id
-        uploaded: Dict[str, str] = {}
+        report = CloudSyncReport()
+
+        if not isinstance(self.storage_service, S3StorageService):
+            return report
+        if not self.storage_service.access_key_id or not self.storage_service.secret_access_key:
+            return report
+
+        report.attempted = True
+        report.required = not self.storage_service.enable_local_fallback
 
         if not job_dir.is_dir():
-            return uploaded
+            return report
 
         for file_path in job_dir.rglob("*"):
             if file_path.is_file():
                 try:
                     rel_key = file_path.relative_to(self.media_root).as_posix()
                     url = self.storage_service.upload_file(local_source_path=file_path, destination_key=rel_key)
-                    uploaded[rel_key] = url
+                    report.uploaded[rel_key] = url
                 except Exception as exc:
-                    logger.warning(f"Failed to sync '{file_path.name}' to cloud storage: {exc}")
+                    report.failure_count += 1
+                    logger.warning("Failed to sync '%s' to cloud storage (%s)", file_path.name, type(exc).__name__)
 
-        return uploaded
+        return report
 
     def delete_job_media(self, job_id: str) -> None:
         """Delete local media directory and cloud storage prefix for job_id."""
@@ -301,7 +323,11 @@ class MediaStorageService:
         try:
             self.storage_service.delete_prefix(f"jobs/{job_id}/")
         except Exception as exc:
-            logger.warning(f"Failed to clean up cloud storage for job '{job_id}': {exc}")
+            logger.warning(
+                "Failed to clean up cloud storage for job '%s' (%s)",
+                job_id,
+                type(exc).__name__,
+            )
 
     # ------------------------------------------------------------------ #
     # Validation helpers                                                   #

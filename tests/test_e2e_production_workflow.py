@@ -22,6 +22,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.models import JobStatus, TimestampedTranscript, TranscriptSegment
 from app.services.job_runner_service import default_job_runner
+from app.services.media_executable_config import resolve_ffmpeg_executable
+from app.services.media_storage_service import default_media_storage
 from app.services.transcription_service import TranscriptionProvider, TranscriptionService
 
 
@@ -58,8 +60,8 @@ def client() -> TestClient:
 @pytest.fixture(scope="module")
 def sample_video(tmp_path_factory) -> Path:
     """Create a temporary 60-second synthetic test video with audio using FFmpeg."""
-    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
-    if not shutil.which(ffmpeg_bin):
+    ffmpeg_bin = resolve_ffmpeg_executable()
+    if not (Path(ffmpeg_bin).is_file() or shutil.which(ffmpeg_bin)):
         pytest.skip("FFmpeg is not installed on system PATH.")
 
     temp_dir = tmp_path_factory.mktemp("prod_e2e")
@@ -124,12 +126,12 @@ class TestProductionWorkflowE2E:
             )
         assert upload_resp.status_code == 200, f"Upload failed: {upload_resp.text}"
         upload_data = upload_resp.json()
-        uploaded_path = upload_data["file_path"]
-        assert Path(uploaded_path).is_file()
+        asset_id = upload_data["asset_id"]
+        assert "file_path" not in upload_data
 
         # 3. Create job #1
         job_payload = {
-            "source": {"type": "upload", "location": uploaded_path},
+            "source": {"type": "upload", "asset_id": asset_id},
             "clip_duration_seconds": 30,
             "min_clip_duration": 20,
             "max_clip_duration": 60,
@@ -177,11 +179,7 @@ class TestProductionWorkflowE2E:
         first_short = shorts[0]
         final_file_path = first_short.get("final_file_path")
         assert final_file_path is not None
-        resolved_path = (
-            Path("outputs") / final_file_path
-            if not Path(final_file_path).is_file()
-            else Path(final_file_path)
-        )
+        resolved_path = default_media_storage.media_root / final_file_path
         assert resolved_path.is_file()
         assert resolved_path.stat().st_size > 0
 

@@ -5,13 +5,13 @@ from an already-ingested video file and saving them as new MP4 clips.
 """
 
 from pathlib import Path
-import shutil
 import subprocess
 from typing import Optional
 from uuid import uuid4
 
 from app.models import IngestedVideo, VideoClipRequest, VideoMetadata
 from app.services.acceleration_service import HardwareAccelerationService, default_acceleration_service
+from app.services.media_executable_config import resolve_ffmpeg_executable
 
 # Default directory for generated clips, located in the ignored `outputs/clips` area.
 DEFAULT_OUTPUT_DIR = Path("outputs") / "clips"
@@ -29,7 +29,7 @@ class VideoClipService:
     def __init__(
         self,
         output_dir: Path | str = DEFAULT_OUTPUT_DIR,
-        ffmpeg_executable: str = "ffmpeg",
+        ffmpeg_executable: Optional[str] = None,
         acceleration_service: Optional[HardwareAccelerationService] = None,
     ) -> None:
         self.output_dir = Path(output_dir)
@@ -86,7 +86,7 @@ class VideoClipService:
             output_path = self.output_dir / f"clip_{unique_clip_id}.mp4"
 
         # Check for executable
-        executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable
+        executable = resolve_ffmpeg_executable(self.ffmpeg_executable)
 
         # Build FFmpeg command with safe list of arguments (shell=False)
         def build_cmd(use_nvenc: bool) -> list[str]:
@@ -117,7 +117,7 @@ class VideoClipService:
             result = self.acceleration_service.run_ffmpeg_with_fallback(
                 command_builder=build_cmd,
                 output_file_validator=validator,
-                ffmpeg_executable=self.ffmpeg_executable,
+                ffmpeg_executable=executable,
             )
         except FileNotFoundError as exc:
             raise VideoClipError(

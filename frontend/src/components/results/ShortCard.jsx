@@ -34,7 +34,7 @@ export function ShortCard({ short, onSelect, isSelected = false }) {
   const isAI = candidate.source_type === 'ai'
   const title = candidate.title
   const hook = candidate.viral_hook
-  const hasBurnedCaptions = Boolean(short.captioned_clip_path)
+  const hasBurnedCaptions = short.captions_present === true || Boolean(short.captioned_clip_path)
   const captionTrack = short.caption_track
   const captionSegments = captionTrack?.segments || []
   const hasCaptions = Boolean(hasBurnedCaptions || captionSegments.length > 0)
@@ -114,6 +114,12 @@ export function ShortCard({ short, onSelect, isSelected = false }) {
       </div>
 
       <div className="short-details">
+        {short.warnings?.map((warning, index) => (
+          <div key={`${warning}-${index}`} role="alert" style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.65rem', color: '#7A5700', fontSize: '0.78rem' }}>
+            <AlertCircle size={14} style={{ flexShrink: 0 }} />
+            <span>{warning}</span>
+          </div>
+        ))}
         <div className="short-meta-header">
           <span className="short-duration-text">
             <Clock size={13} />
@@ -264,8 +270,8 @@ export function ShortCard({ short, onSelect, isSelected = false }) {
               type="button"
               className="btn-secondary"
               onClick={handleCopyPath}
-              title="Copy local file path"
-              aria-label="Copy local file path"
+              title="Copy media reference"
+              aria-label="Copy media reference"
             >
               {copied ? <Check size={15} /> : <Copy size={15} />}
             </button>

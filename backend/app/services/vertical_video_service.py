@@ -6,13 +6,13 @@ without distorting or stretching the original aspect ratio.
 """
 
 from pathlib import Path
-import shutil
 import subprocess
 from typing import Optional, Tuple
 from uuid import uuid4
 
 from app.models import FramingType, IngestedVideo, VerticalVideoRequest
 from app.services.acceleration_service import HardwareAccelerationService, default_acceleration_service
+from app.services.media_executable_config import resolve_ffmpeg_executable
 from app.services.smart_framing_service import SmartFramingPlan, SmartFramingService
 
 # Default directory for generated vertical clips, located in the ignored `outputs/vertical` area.
@@ -31,7 +31,7 @@ class VerticalVideoService:
     def __init__(
         self,
         output_dir: Path | str = DEFAULT_VERTICAL_OUTPUT_DIR,
-        ffmpeg_executable: str = "ffmpeg",
+        ffmpeg_executable: Optional[str] = None,
         smart_framing_service: Optional[SmartFramingService] = None,
         enable_smart_framing: bool = True,
         acceleration_service: Optional[HardwareAccelerationService] = None,
@@ -104,7 +104,7 @@ class VerticalVideoService:
             output_path = self.output_dir / f"vertical_{unique_id}.mp4"
 
         # Check for FFmpeg executable
-        executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable
+        executable = resolve_ffmpeg_executable(self.ffmpeg_executable)
 
         # Determine framing plan (Smart framing vs center crop)
         should_smart_frame = self.enable_smart_framing if use_smart_framing is None else use_smart_framing
@@ -114,6 +114,7 @@ class VerticalVideoService:
             target_crop_x_normalized=0.5,
             confidence=0.0,
         )
+        processing_warning: Optional[str] = None
 
         if should_smart_frame:
             try:
@@ -123,6 +124,8 @@ class VerticalVideoService:
                     target_width=req.width,
                     target_height=req.height,
                 )
+                if self.smart_framing_service.last_detection_failed:
+                    processing_warning = "Smart framing analysis failed; center crop was used."
             except Exception:
                 # Safe fallback to center crop
                 framing_plan = SmartFramingPlan(
@@ -131,6 +134,7 @@ class VerticalVideoService:
                     target_crop_x_normalized=0.5,
                     confidence=0.0,
                 )
+                processing_warning = "Smart framing analysis failed; center crop was used."
 
         # Build FFmpeg filter expression with smart or center crop
         crop_x = framing_plan.crop_x_expr
@@ -162,7 +166,7 @@ class VerticalVideoService:
             result = self.acceleration_service.run_ffmpeg_with_fallback(
                 command_builder=build_cmd,
                 output_file_validator=validator,
-                ffmpeg_executable=self.ffmpeg_executable,
+                ffmpeg_executable=executable,
             )
         except FileNotFoundError as exc:
             raise VerticalVideoError(
@@ -192,4 +196,5 @@ class VerticalVideoService:
         return IngestedVideo(
             file_path=str(output_path),
             framing_type=framing_plan.framing_type,
+            processing_warning=processing_warning,
         )

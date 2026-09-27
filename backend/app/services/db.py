@@ -199,9 +199,8 @@ def get_database_report(config: Optional[DatabaseConfig] = None) -> DatabaseDiag
                 error=None,
             )
         except Exception as exc:
-            err = str(exc)
             latency_ms = round((time.perf_counter() - t0) * 1000, 2)
-            logger.warning("PostgreSQL health probe failed: %s", exc)
+            logger.warning("PostgreSQL health probe failed (%s)", type(exc).__name__)
             return DatabaseDiagnosticsReport(
                 backend="postgresql",
                 configured_backend=cfg.configured_backend,
@@ -212,7 +211,7 @@ def get_database_report(config: Optional[DatabaseConfig] = None) -> DatabaseDiag
                 migration_version=0,
                 latency_ms=latency_ms,
                 local_fallback_active=cfg.enable_local_fallback,
-                error=err,
+                error="Database connection failed.",
             )
 
     # SQLite diagnostic probe
@@ -255,7 +254,7 @@ def get_database_report(config: Optional[DatabaseConfig] = None) -> DatabaseDiag
             migration_version=0,
             latency_ms=latency_ms,
             local_fallback_active=False,
-            error=str(exc),
+            error=f"Database health check failed ({type(exc).__name__}).",
         )
 
 

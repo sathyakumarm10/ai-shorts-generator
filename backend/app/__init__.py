@@ -1,9 +1,11 @@
-"""AI Shorts Generator - Backend application package.
+"""AI Shorts Generator backend package."""
 
-This package will contain the FastAPI application, including API routes,
-business logic, and integrations for the AI Shorts Generator project.
+from pathlib import Path
 
-The project is currently in the initial scaffolding stage. No application
-features (video processing, AI processing, transcription, YouTube
-downloading, authentication, payments, etc.) have been implemented yet.
-"""
+from dotenv import load_dotenv
+
+
+# Load local development configuration before service modules create their
+# environment-backed singleton instances. Existing process variables win so
+# Docker, CI, and production deployments can override backend/.env safely.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)

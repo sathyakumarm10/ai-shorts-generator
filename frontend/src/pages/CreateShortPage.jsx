@@ -19,7 +19,7 @@ export function CreateShortPage({
   onGenerate,
   error,
 }) {
-  const canSubmit = Boolean(uploadedData?.file_path || videoUrl.trim())
+  const canSubmit = Boolean(uploadedData?.asset_id || videoUrl.trim())
 
   return (
     <div className="create-short-page">

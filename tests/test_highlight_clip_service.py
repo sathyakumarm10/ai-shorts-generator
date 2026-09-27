@@ -244,10 +244,14 @@ class TestHighlightClipRealIntegration:
         import shutil
         import subprocess
 
-        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
-        ffprobe_bin = shutil.which("ffprobe") or "ffprobe"
+        from app.services.media_executable_config import resolve_ffmpeg_executable, resolve_ffprobe_executable
 
-        if not shutil.which(ffmpeg_bin) or not shutil.which(ffprobe_bin):
+        ffmpeg_bin = resolve_ffmpeg_executable()
+        ffprobe_bin = resolve_ffprobe_executable()
+
+        if not (Path(ffmpeg_bin).is_file() or shutil.which(ffmpeg_bin)) or not (
+            Path(ffprobe_bin).is_file() or shutil.which(ffprobe_bin)
+        ):
             pytest.skip("FFmpeg/ffprobe binaries are not available.")
 
         # 1. Create a 70-second synthetic source video with colored frames and tone

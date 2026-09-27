@@ -187,7 +187,11 @@ def _register_user(client: TestClient, prefix: str):
     return data
 
 
-def test_api_user_isolation_and_idor_prevention():
+def test_api_user_isolation_and_idor_prevention(monkeypatch):
+    from concurrent.futures import Future
+    from app.services.job_runner_service import default_job_runner
+
+    monkeypatch.setattr(default_job_runner, "submit_job", lambda *args, **kwargs: Future())
     client = TestClient(app)
 
     # =========================================================
@@ -251,8 +255,8 @@ def test_api_user_isolation_and_idor_prevention():
         headers=headers_a,
         json={
             "source": {
-                "type": "upload",
-                "location": "alpha_video.mp4",
+                "type": "youtube",
+                "location": "https://www.youtube.com/watch?v=alpha",
             },
             "clip_duration_seconds": 60,
             "number_of_clips": 1,

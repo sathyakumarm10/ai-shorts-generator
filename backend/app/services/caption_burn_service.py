@@ -5,7 +5,6 @@ subtitles directly onto video frames using mobile-readable styling and FFmpeg.
 """
 
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 from typing import Optional
@@ -16,6 +15,7 @@ from app.services.acceleration_service import HardwareAccelerationService, defau
 from app.services.caption_service import CaptionService
 from app.services.dynamic_caption_service import DynamicCaptionService
 from app.services.karaoke_caption_service import KaraokeCaptionService
+from app.services.media_executable_config import resolve_ffmpeg_executable
 
 # Default output directory for captioned videos, located in ignored `outputs/captioned` area.
 DEFAULT_CAPTIONED_OUTPUT_DIR = Path("outputs") / "captioned"
@@ -37,7 +37,7 @@ class CaptionBurnService:
     def __init__(
         self,
         output_dir: Path | str = DEFAULT_CAPTIONED_OUTPUT_DIR,
-        ffmpeg_executable: str = "ffmpeg",
+        ffmpeg_executable: Optional[str] = None,
         caption_service: Optional[CaptionService] = None,
         dynamic_caption_service: Optional[DynamicCaptionService] = None,
         karaoke_caption_service: Optional[KaraokeCaptionService] = None,
@@ -105,7 +105,7 @@ class CaptionBurnService:
         else:
             unique_id = uuid4().hex
             output_path = dest_dir / f"captioned_{unique_id}.mp4"
-        executable = shutil.which(self.ffmpeg_executable) or self.ffmpeg_executable
+        executable = resolve_ffmpeg_executable(self.ffmpeg_executable)
 
         target_preset = preset or CaptionPreset.DEFAULT
 
@@ -148,7 +148,7 @@ class CaptionBurnService:
                     res = self.acceleration_service.run_ffmpeg_with_fallback(
                         command_builder=build_ass_cmd,
                         output_file_validator=validator,
-                        ffmpeg_executable=self.ffmpeg_executable,
+                        ffmpeg_executable=executable,
                     )
                     if res.returncode == 0 and validator():
                         return IngestedVideo(file_path=str(output_path))
@@ -195,7 +195,7 @@ class CaptionBurnService:
                 result = self.acceleration_service.run_ffmpeg_with_fallback(
                     command_builder=build_srt_cmd,
                     output_file_validator=validator,
-                    ffmpeg_executable=self.ffmpeg_executable,
+                    ffmpeg_executable=executable,
                 )
             except FileNotFoundError as exc:
                 raise CaptionBurnError(f"FFmpeg executable '{self.ffmpeg_executable}' not found on system path.") from exc

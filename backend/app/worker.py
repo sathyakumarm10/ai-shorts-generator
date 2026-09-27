@@ -89,8 +89,13 @@ class ShortsWorker:
                     logger.info("Worker [%s] successfully finished job %s", self.worker_id, msg.job_id)
 
                 except Exception as exc:
-                    err_msg = str(exc)
-                    logger.warning("Worker [%s] error processing job %s: %s", self.worker_id, msg.job_id, err_msg)
+                    err_msg = f"Job processing failed ({type(exc).__name__})."
+                    logger.warning(
+                        "Worker [%s] error processing job %s (%s)",
+                        self.worker_id,
+                        msg.job_id,
+                        type(exc).__name__,
+                    )
                     will_retry = self.queue.fail(msg.job_id, err_msg, can_retry=True)
                     if will_retry:
                         logger.info("Worker [%s] scheduled retry for job %s", self.worker_id, msg.job_id)
@@ -98,7 +103,11 @@ class ShortsWorker:
                         logger.error("Worker [%s] job %s permanently failed", self.worker_id, msg.job_id)
 
             except Exception as exc:
-                logger.error("Worker [%s] unexpected loop exception: %s", self.worker_id, exc)
+                logger.error(
+                    "Worker [%s] unexpected loop exception (%s)",
+                    self.worker_id,
+                    type(exc).__name__,
+                )
                 time.sleep(1.0)
 
         logger.info("Worker [%s] stopped gracefully.", self.worker_id)

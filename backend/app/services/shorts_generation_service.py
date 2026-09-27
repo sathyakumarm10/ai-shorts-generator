@@ -1,45 +1,57 @@
-"""End-to-End automatic Shorts generation orchestration service.
+"""End-to-end Shorts generation with explicit stage and clip outcomes."""
 
-This module provides the central `ShortsGenerationService` that coordinates
-ingestion, metadata extraction, speech-to-text transcription, highlight detection,
-candidate clipping, vertical 9:16 framing, and styled caption burn-in into a single
-unified video processing pipeline.
-"""
-
+import logging
 from typing import Callable, List, Optional
 
 from app.models import (
-    CaptionSegment,
     CaptionTrack,
+    ClipProcessingOutcome,
     FramingType,
     GeneratedShort,
     HighlightCandidate,
+    HighlightMethod,
     HighlightSource,
     JobStatus,
+    OutcomeStatus,
+    ProcessingStage,
     ShortsGenerationRequest,
     ShortsGenerationResult,
+    StageOutcome,
     VerticalVideoRequest,
     VideoSource,
 )
 from app.services.ai_highlight_service import AIHighlightService
-from app.services.caption_burn_service import CaptionBurnError, CaptionBurnService
-from app.services.caption_service import CaptionService, CaptionServiceError
-from app.services.highlight_clip_service import HighlightClipError, HighlightClipService
-from app.services.highlight_scoring_service import HighlightScoringError, HighlightScoringService
-from app.services.transcription_service import FasterWhisperTranscriptionProvider, TranscriptionError, TranscriptionService
-from app.services.vertical_video_service import VerticalVideoError, VerticalVideoService
-from app.services.video_ingestion_service import VideoIngestionError, VideoIngestionService
-from app.services.video_metadata_service import VideoMetadataError, VideoMetadataService
+from app.services.caption_burn_service import CaptionBurnService
+from app.services.caption_service import CaptionService
+from app.services.highlight_clip_service import HighlightClipService
+from app.services.highlight_scoring_service import HighlightScoringService
+from app.services.media_output_validation_service import MediaOutputValidationService
+from app.services.transcription_service import FasterWhisperTranscriptionProvider, TranscriptionService
+from app.services.vertical_video_service import VerticalVideoService
+from app.services.video_ingestion_service import VideoIngestionService
+from app.services.video_metadata_service import VideoMetadataService
+
+logger = logging.getLogger(__name__)
 
 
 class ShortsGenerationError(Exception):
-    """Domain exception raised when end-to-end Shorts generation fails."""
+    """Pipeline error carrying separate safe and diagnostic messages."""
 
-    pass
+    def __init__(
+        self,
+        user_message: str,
+        *,
+        diagnostic: Optional[str] = None,
+        stage: Optional[ProcessingStage] = None,
+    ) -> None:
+        self.user_message = user_message
+        self.diagnostic = diagnostic or user_message
+        self.stage = stage
+        super().__init__(self.user_message)
 
 
 class ShortsGenerationService:
-    """Orchestrates the entire video-to-Shorts generation pipeline."""
+    """Orchestrates ingestion, selection, rendering, validation, and captions."""
 
     def __init__(
         self,
@@ -52,6 +64,7 @@ class ShortsGenerationService:
         caption_service: Optional[CaptionService] = None,
         caption_burn_service: Optional[CaptionBurnService] = None,
         ai_highlight_service: Optional[AIHighlightService] = None,
+        output_validation_service: Optional[MediaOutputValidationService] = None,
     ) -> None:
         self.ingestion_service = ingestion_service or VideoIngestionService()
         self.metadata_service = metadata_service or VideoMetadataService()
@@ -66,6 +79,11 @@ class ShortsGenerationService:
             caption_service=self.caption_service
         )
         self.ai_highlight_service = ai_highlight_service or AIHighlightService()
+        self.output_validation_service = output_validation_service or MediaOutputValidationService()
+
+    @staticmethod
+    def _failure(message: str, stage: ProcessingStage, exc: Exception) -> ShortsGenerationError:
+        return ShortsGenerationError(message, diagnostic=str(exc), stage=stage)
 
     def generate(
         self,
@@ -79,44 +97,10 @@ class ShortsGenerationService:
         vertical_height: int = 1920,
         progress_callback: Optional[Callable[[JobStatus, float, str], None]] = None,
     ) -> ShortsGenerationResult:
-        """Run the full end-to-end shorts generation pipeline.
+        def progress(status: JobStatus, percent: float, message: str) -> None:
+            if progress_callback:
+                progress_callback(status, percent, message)
 
-        Pipeline Stages:
-            1. Ingest source video (local file or download).
-            2. Extract video metadata (resolution, duration, codecs).
-            3. Transcribe audio into timestamped speech segments.
-            4. Detect and rank highlight candidates from the transcript.
-            5. Render trimmed MP4 clips for the highest-ranked candidates.
-            6. Convert each clip to 9:16 vertical video without geometric distortion.
-            7. (Optional) Slice and offset transcript captions, burning them into vertical video.
-            8. Assemble and return final ShortsGenerationResult.
-
-        Args:
-            source: VideoSource or validated ShortsGenerationRequest.
-            clip_duration_seconds: Desired target duration of each short.
-            number_of_clips: Number of top highlight candidates to render (default 10, max 15).
-            include_captions: Whether to burn styled captions into the video.
-            min_clip_duration: Minimum allowed duration for a candidate.
-            max_clip_duration: Maximum allowed duration for a candidate.
-            vertical_width: Target vertical width in pixels.
-            vertical_height: Target vertical height in pixels.
-            progress_callback: Optional callback receiving (status, progress_percent, message).
-
-        Returns:
-            ShortsGenerationResult: Complete result with ingested video, metadata,
-                                    transcript, candidate list, and rendered shorts.
-
-        Raises:
-            ShortsGenerationError: If any stage in the pipeline fails.
-        """
-        def report_progress(status: JobStatus, percent: float, msg: str) -> None:
-            if progress_callback is not None:
-                try:
-                    progress_callback(status, percent, msg)
-                except Exception:
-                    pass
-
-        # Validate or build ShortsGenerationRequest
         if isinstance(source, ShortsGenerationRequest):
             req = source
         elif isinstance(source, VideoSource):
@@ -132,40 +116,41 @@ class ShortsGenerationService:
                     vertical_height=vertical_height,
                 )
             except Exception as exc:
-                raise ShortsGenerationError(f"Invalid ShortsGenerationRequest parameters: {exc}") from exc
+                raise ShortsGenerationError("Invalid generation settings.", diagnostic=str(exc)) from exc
         else:
-            raise ShortsGenerationError(
-                f"Expected VideoSource or ShortsGenerationRequest, got {type(source).__name__}"
-            )
+            raise ShortsGenerationError("Invalid video source.")
 
-        # 1. Ingest source video
-        report_progress(JobStatus.INGESTING, 10.0, "Ingesting source video")
+        outcomes: list[StageOutcome] = []
+        warnings: list[str] = []
+
+        progress(JobStatus.INGESTING, 10, "Ingesting source video")
         try:
             ingested_video = self.ingestion_service.ingest(req.source)
-        except (VideoIngestionError, Exception) as exc:
-            raise ShortsGenerationError(f"Video ingestion failed: {exc}") from exc
+            outcomes.append(StageOutcome(stage=ProcessingStage.SOURCE_INGESTION, status=OutcomeStatus.SUCCESS, message="Source video was ingested."))
+        except Exception as exc:
+            raise self._failure("Source ingestion failed.", ProcessingStage.SOURCE_INGESTION, exc) from exc
 
-        # 2. Extract metadata
-        report_progress(JobStatus.EXTRACTING_METADATA, 20.0, "Extracting video metadata")
+        progress(JobStatus.EXTRACTING_METADATA, 20, "Extracting video metadata")
         try:
             metadata = self.metadata_service.extract_metadata(ingested_video.file_path)
-        except (VideoMetadataError, Exception) as exc:
-            raise ShortsGenerationError(f"Video metadata extraction failed: {exc}") from exc
+            outcomes.append(StageOutcome(stage=ProcessingStage.METADATA, status=OutcomeStatus.SUCCESS, message="Video metadata was read."))
+        except Exception as exc:
+            raise self._failure("Video metadata could not be read.", ProcessingStage.METADATA, exc) from exc
 
-        # 3. Transcribe audio into timestamped transcript
-        report_progress(JobStatus.TRANSCRIBING, 35.0, "Transcribing audio to text")
+        progress(JobStatus.TRANSCRIBING, 35, "Transcribing audio to text")
         try:
             transcript = self.transcription_service.transcribe(ingested_video)
-        except (TranscriptionError, Exception) as exc:
-            raise ShortsGenerationError(f"Audio transcription failed: {exc}") from exc
+            if not transcript.segments or not any(segment.text.strip() for segment in transcript.segments):
+                raise ValueError("Transcription returned no speech segments")
+            outcomes.append(StageOutcome(stage=ProcessingStage.TRANSCRIPTION, status=OutcomeStatus.SUCCESS, message="Audio transcription completed."))
+        except Exception as exc:
+            raise self._failure("No usable speech could be transcribed from this video.", ProcessingStage.TRANSCRIPTION, exc) from exc
 
-        # 4. Highlight detection and candidate generation
-        report_progress(JobStatus.FINDING_HIGHLIGHTS, 50.0, "Analyzing transcript for highlights")
+        progress(JobStatus.FINDING_HIGHLIGHTS, 50, "Analyzing transcript for highlights")
         candidates: List[HighlightCandidate] = []
-
-        # Try AI intelligent candidate extraction first
+        highlight_method = HighlightMethod.REMOTE_AI
         try:
-            ai_candidates = self.ai_highlight_service.generate_ai_candidates(
+            candidates = self.ai_highlight_service.generate_ai_candidates(
                 transcript=transcript,
                 min_duration=req.min_clip_duration,
                 max_duration=req.max_clip_duration,
@@ -173,161 +158,198 @@ class ShortsGenerationService:
                 max_clips=req.number_of_clips,
                 video_duration=metadata.duration_seconds,
             )
-            if ai_candidates:
-                candidates = ai_candidates
-        except Exception:
-            candidates = []
+        except Exception as exc:
+            logger.warning("Remote highlight selection failed; using heuristic fallback (%s)", type(exc).__name__)
 
-        # Fallback to deterministic heuristic scoring if AI yielded no valid candidates
         if not candidates:
+            highlight_method = HighlightMethod.HEURISTIC_FALLBACK
+            fallback_warning = "Remote AI highlight selection was unavailable; heuristic selection was used."
             try:
-                heuristic_candidates: List[HighlightCandidate] = self.highlight_scoring_service.generate_candidates(
+                candidates = self.highlight_scoring_service.generate_candidates(
                     transcript,
                     min_duration=req.min_clip_duration,
                     max_duration=req.max_clip_duration,
                     target_duration=req.clip_duration_seconds,
                     allow_overlap=False,
                 )
-                # Synthesize informative titles and viral hooks for heuristic candidates
-                for i, c in enumerate(heuristic_candidates, start=1):
-                    preview = (c.text[:45] + "...") if len(c.text) > 45 else c.text
-                    c.title = f"Highlight #{i}: {preview}"
-                    c.viral_hook = f"Must Watch: {c.text[:55]}..."
-                    c.description = c.text
-                    c.source_type = HighlightSource.HEURISTIC
-                candidates = heuristic_candidates
-            except (HighlightScoringError, Exception) as exc:
-                raise ShortsGenerationError(f"Highlight candidate generation failed: {exc}") from exc
-
-        if not candidates:
-            report_progress(JobStatus.FINDING_HIGHLIGHTS, 60.0, "No candidate clips found in transcript")
-            return ShortsGenerationResult(
-                source_video=ingested_video,
-                metadata=metadata,
-                transcript=transcript,
-                candidates=[],
-                generated_shorts=[],
-            )
-
-        # Cap candidates to requested number_of_clips
-        candidates = candidates[:req.number_of_clips]
-
-        # 5. Render candidate raw clips
-        report_progress(JobStatus.GENERATING_CLIPS, 60.0, f"Rendering {len(candidates)} candidate clips")
-        try:
-            rendered_clips = self.highlight_clip_service.generate_clips(
-                video=ingested_video,
-                candidates=candidates,
-                max_clips=req.number_of_clips,
-            )
-        except (HighlightClipError, Exception) as exc:
-            raise ShortsGenerationError(f"Highlight clip rendering failed: {exc}") from exc
-
-        # 6 & 7. Convert each rendered clip to vertical 9:16 and optionally burn relative captions
-        generated_shorts: List[GeneratedShort] = []
-        failed_count = 0
-        total_clips = len(rendered_clips)
-
-        for idx, clip in enumerate(rendered_clips, start=1):
-            cand = clip.candidate
-            # Smooth progress calculation across 60.0% -> 95.0%
-            progress_pct = 60.0 + (35.0 * (idx / max(1, total_clips)))
-
-            # Convert to vertical 9:16 with fault tolerance
-            report_progress(JobStatus.CONVERTING_VERTICAL, progress_pct, f"Converting short #{idx}/{total_clips} to 9:16 vertical format")
-            try:
-                vert_req = VerticalVideoRequest(width=req.vertical_width, height=req.vertical_height)
-                vert_filename = f"short_{idx:03d}.mp4"
-                vertical_video = self.vertical_video_service.convert_to_vertical(
-                    clip.file_path,
-                    vert_req,
-                    output_filename=vert_filename,
-                )
+                for index, candidate in enumerate(candidates, start=1):
+                    preview = candidate.text[:45] + ("..." if len(candidate.text) > 45 else "")
+                    candidate.title = f"Highlight #{index}: {preview}"
+                    candidate.viral_hook = f"Must Watch: {candidate.text[:55]}..."
+                    candidate.description = candidate.text
+                    candidate.source_type = HighlightSource.HEURISTIC
+                if not candidates:
+                    raise ValueError("Heuristic selection returned no candidates")
             except Exception as exc:
-                # Capture individual rendering failure gracefully, log, and continue processing remaining candidates
-                failed_count += 1
+                raise self._failure("No highlight clips could be selected.", ProcessingStage.HIGHLIGHT_SELECTION, exc) from exc
+            warnings.append(fallback_warning)
+            outcomes.append(StageOutcome(stage=ProcessingStage.HIGHLIGHT_SELECTION, status=OutcomeStatus.WARNING, message=fallback_warning))
+        else:
+            outcomes.append(StageOutcome(stage=ProcessingStage.HIGHLIGHT_SELECTION, status=OutcomeStatus.SUCCESS, message="Highlights were selected using remote AI."))
+
+        candidates = candidates[:req.number_of_clips]
+        progress(JobStatus.GENERATING_CLIPS, 60, f"Rendering {len(candidates)} candidate clips")
+        try:
+            rendered_clips = self.highlight_clip_service.generate_clips(ingested_video, candidates, req.number_of_clips)
+        except Exception as exc:
+            raise self._failure("All highlight clip renders failed.", ProcessingStage.CLIP_RENDER, exc) from exc
+
+        rendered_by_candidate = {
+            (clip.candidate.start_seconds, clip.candidate.end_seconds): clip for clip in rendered_clips
+        }
+        clip_outcomes: list[ClipProcessingOutcome] = []
+        generated_shorts: list[GeneratedShort] = []
+        clip_render_failures = len(candidates) - len(rendered_clips)
+        framing_fallbacks = 0
+
+        for candidate_index, candidate in enumerate(candidates, start=1):
+            clip = rendered_by_candidate.get((candidate.start_seconds, candidate.end_seconds))
+            if clip is None:
+                clip_outcomes.append(ClipProcessingOutcome(index=candidate_index, candidate=candidate, status=OutcomeStatus.FAILURE, stage=ProcessingStage.CLIP_RENDER, message="Clip rendering failed for this highlight."))
                 continue
 
-            framing_type = vertical_video.framing_type or FramingType.CENTER_CROP
-            captioned_clip_path: Optional[str] = None
-            final_path = vertical_video.file_path
-
-            # Optional: Extract relative captions for this clip's time window and burn them
-            short_caption_track: Optional[CaptionTrack] = None
-            if req.include_captions:
-                report_progress(
-                    JobStatus.ADDING_CAPTIONS,
-                    progress_pct,
-                    f"Burning styled captions into short #{idx}/{total_clips}",
+            percent = 60 + (35 * candidate_index / max(1, len(candidates)))
+            progress(JobStatus.CONVERTING_VERTICAL, percent, f"Converting short #{candidate_index}/{len(candidates)} to vertical format")
+            try:
+                vertical_video = self.vertical_video_service.convert_to_vertical(
+                    clip.file_path,
+                    VerticalVideoRequest(width=req.vertical_width, height=req.vertical_height),
+                    output_filename=f"short_{candidate_index:03d}.mp4",
                 )
+                self.output_validation_service.validate_video(
+                    vertical_video.file_path,
+                    expected_duration_seconds=candidate.duration_seconds,
+                    expected_width=req.vertical_width,
+                    expected_height=req.vertical_height,
+                )
+            except Exception as exc:
+                logger.error("Clip %s vertical render failed (%s)", candidate_index, type(exc).__name__)
+                clip_outcomes.append(ClipProcessingOutcome(index=candidate_index, candidate=candidate, status=OutcomeStatus.FAILURE, stage=ProcessingStage.VERTICAL_RENDER, message="Vertical rendering failed for this clip."))
+                continue
+
+            caption_track: Optional[CaptionTrack] = None
+            captioned_path: Optional[str] = None
+            captions_present = False
+            short_warnings: list[str] = []
+            final_path = vertical_video.file_path
+            clip_status = OutcomeStatus.SUCCESS
+            clip_stage = ProcessingStage.OUTPUT_VALIDATION
+            clip_message = "Clip rendered and validated successfully."
+            if vertical_video.processing_warning:
+                short_warnings.append(vertical_video.processing_warning)
+                warnings.append(vertical_video.processing_warning)
+                framing_fallbacks += 1
+                clip_status = OutcomeStatus.WARNING
+                clip_stage = ProcessingStage.VERTICAL_RENDER
+                clip_message = vertical_video.processing_warning
+
+            if req.include_captions:
+                progress(JobStatus.ADDING_CAPTIONS, percent, f"Adding captions to short #{candidate_index}/{len(candidates)}")
                 try:
-                    res = self.caption_service.extract_short_captions(
+                    result = self.caption_service.extract_short_captions(
                         transcript=transcript,
-                        start_seconds=cand.start_seconds,
-                        end_seconds=cand.end_seconds,
+                        start_seconds=candidate.start_seconds,
+                        end_seconds=candidate.end_seconds,
                         max_chars_per_line=38,
                     )
-                    if isinstance(res, CaptionTrack):
-                        short_caption_track = res
-                    else:
-                        short_caption_track = CaptionService().extract_short_captions(
-                            transcript=transcript,
-                            start_seconds=cand.start_seconds,
-                            end_seconds=cand.end_seconds,
-                            max_chars_per_line=38,
-                        )
-                    cap_filename = f"short_{idx:03d}.mp4"
+                    caption_track = result if isinstance(result, CaptionTrack) else CaptionService().extract_short_captions(
+                        transcript, candidate.start_seconds, candidate.end_seconds, 38
+                    )
+                    if not caption_track.segments:
+                        raise ValueError("Caption extraction returned no segments")
                     captioned_video = self.caption_burn_service.burn_captions(
                         vertical_video.file_path,
-                        short_caption_track,
+                        caption_track,
                         preset=req.caption_preset,
                         enable_karaoke=getattr(req, "enable_karaoke", True),
                         karaoke_active_color=getattr(req, "karaoke_active_color", None),
-                        output_filename=cap_filename,
+                        output_filename=f"short_{candidate_index:03d}.mp4",
                     )
-                    captioned_clip_path = captioned_video.file_path
-                    final_path = captioned_video.file_path
-                except (CaptionServiceError, CaptionBurnError, Exception):
-                    # Gracefully fall back to non-captioned vertical video so short completes
-                    captioned_clip_path = None
-                    final_path = vertical_video.file_path
+                    self.output_validation_service.validate_video(
+                        captioned_video.file_path,
+                        expected_duration_seconds=candidate.duration_seconds,
+                        expected_width=req.vertical_width,
+                        expected_height=req.vertical_height,
+                    )
+                    captioned_path = captioned_video.file_path
+                    final_path = captioned_path
+                    captions_present = True
+                except Exception as exc:
+                    logger.error("Clip %s caption rendering failed (%s)", candidate_index, type(exc).__name__)
+                    message = "Caption rendering failed; the uncaptioned video is available."
+                    short_warnings.append(message)
+                    warnings.append(message)
+                    clip_status = OutcomeStatus.WARNING
+                    clip_stage = ProcessingStage.CAPTIONS
+                    clip_message = message
 
             short_index = len(generated_shorts) + 1
-            generated_shorts.append(
-                GeneratedShort(
-                    index=short_index,
-                    candidate=cand,
-                    source_clip_path=clip.file_path,
-                    vertical_clip_path=vertical_video.file_path,
-                    captioned_clip_path=captioned_clip_path,
-                    final_file_path=final_path,
-                    framing_type=framing_type,
-                    caption_preset=req.caption_preset if captioned_clip_path else None,
-                    is_karaoke=bool(
-                        captioned_clip_path and getattr(req, "enable_karaoke", True)
-                    ),
-                    caption_track=short_caption_track,
-                )
-            )
+            generated_shorts.append(GeneratedShort(
+                index=short_index,
+                candidate=candidate,
+                source_clip_path=clip.file_path,
+                vertical_clip_path=vertical_video.file_path,
+                captioned_clip_path=captioned_path,
+                final_file_path=final_path,
+                framing_type=vertical_video.framing_type or FramingType.CENTER_CROP,
+                caption_preset=req.caption_preset if captions_present else None,
+                is_karaoke=bool(captions_present and getattr(req, "enable_karaoke", True)),
+                caption_track=caption_track,
+                captions_present=captions_present,
+                warnings=short_warnings,
+            ))
+            clip_outcomes.append(ClipProcessingOutcome(index=candidate_index, candidate=candidate, status=clip_status, stage=clip_stage, message=clip_message, generated_short_index=short_index))
 
-        if not generated_shorts and total_clips > 0:
-            raise ShortsGenerationError("All candidate short rendering attempts failed.")
+        if not generated_shorts:
+            raise ShortsGenerationError("All candidate short rendering attempts failed.", stage=ProcessingStage.VERTICAL_RENDER)
+
+        if clip_render_failures:
+            message = f"{clip_render_failures} selected clip(s) failed during initial rendering."
+            warnings.append(message)
+            outcomes.append(StageOutcome(stage=ProcessingStage.CLIP_RENDER, status=OutcomeStatus.WARNING, message=message))
+        else:
+            outcomes.append(StageOutcome(stage=ProcessingStage.CLIP_RENDER, status=OutcomeStatus.SUCCESS, message="All selected clips were rendered."))
+
+        failed_vertical = sum(o.stage == ProcessingStage.VERTICAL_RENDER and o.status == OutcomeStatus.FAILURE for o in clip_outcomes)
+        failed_captions = sum(o.stage == ProcessingStage.CAPTIONS for o in clip_outcomes)
+        outcomes.append(StageOutcome(
+            stage=ProcessingStage.VERTICAL_RENDER,
+            status=OutcomeStatus.WARNING if failed_vertical or framing_fallbacks else OutcomeStatus.SUCCESS,
+            message=(
+                f"{failed_vertical} clip(s) failed vertical rendering."
+                if failed_vertical
+                else f"{framing_fallbacks} clip(s) used center-crop fallback."
+                if framing_fallbacks
+                else "Vertical rendering completed."
+            ),
+        ))
+        if req.include_captions:
+            outcomes.append(StageOutcome(
+                stage=ProcessingStage.CAPTIONS,
+                status=OutcomeStatus.WARNING if failed_captions else OutcomeStatus.SUCCESS,
+                message=f"{failed_captions} clip(s) use an uncaptioned fallback." if failed_captions else "Caption rendering completed.",
+            ))
+        outcomes.append(StageOutcome(stage=ProcessingStage.OUTPUT_VALIDATION, status=OutcomeStatus.SUCCESS, message="All available final videos passed media validation."))
 
         try:
             from app.services.observability import default_metrics_collector
             default_metrics_collector.record_shorts_metrics(
                 requested=req.number_of_clips,
                 generated=len(generated_shorts),
-                failed=failed_count,
+                failed=len(candidates) - len(generated_shorts),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Could not record generation metrics (%s)", type(exc).__name__)
 
-        report_progress(JobStatus.ADDING_CAPTIONS, 95.0, f"Finalizing {len(generated_shorts)} generated shorts")
+        progress(JobStatus.ADDING_CAPTIONS, 95, f"Finalizing {len(generated_shorts)} generated shorts")
         return ShortsGenerationResult(
             source_video=ingested_video,
             metadata=metadata,
             transcript=transcript,
             candidates=candidates,
             generated_shorts=generated_shorts,
+            stage_outcomes=outcomes,
+            clip_outcomes=clip_outcomes,
+            warnings=list(dict.fromkeys(warnings)),
+            highlight_method=highlight_method,
         )

@@ -177,11 +177,11 @@ describe('Phase 3 - SubtitleEditor Component', () => {
       screen.getByText(/Start time must be greater than or equal to 0.0s/i)
     ).toBeInTheDocument()
 
-    const saveBtn = screen.getByRole('button', { name: /save subtitles/i })
+    const saveBtn = screen.getByRole('button', { name: /update preview draft/i })
     expect(saveBtn).toBeDisabled()
   })
 
-  it('saves updated subtitles and notifies user about persistence requiring backend endpoint', async () => {
+  it('updates a local preview draft without implying the exported video changed', async () => {
     const onSave = vi.fn().mockResolvedValue({})
     render(
       <SubtitleEditor
@@ -193,7 +193,7 @@ describe('Phase 3 - SubtitleEditor Component', () => {
       />
     )
 
-    const saveBtn = screen.getByRole('button', { name: /save subtitles/i })
+    const saveBtn = screen.getByRole('button', { name: /update preview draft/i })
     expect(saveBtn).toBeEnabled()
 
     fireEvent.click(saveBtn)
@@ -201,10 +201,10 @@ describe('Phase 3 - SubtitleEditor Component', () => {
     await waitFor(() => {
       expect(onSave).toHaveBeenCalled()
       expect(
-        screen.getByText(/Subtitles updated in workspace/i)
+        screen.getByText(/Preview draft updated locally/i)
       ).toBeInTheDocument()
       expect(
-        screen.getByText(/Persistence requires a backend endpoint/i)
+        screen.getByText(/exported video is unchanged/i)
       ).toBeInTheDocument()
     })
   })

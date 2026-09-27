@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { UploadCloud, Link as LinkIcon, Video, Trash2, CheckCircle2, Film, AlertCircle } from 'lucide-react'
 
 export function VideoSourceSelector({
@@ -14,7 +14,23 @@ export function VideoSourceSelector({
   error,
 }) {
   const [isDragOver, setIsDragOver] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState('')
   const fileInputRef = useRef(null)
+
+  useEffect(() => {
+    if (!selectedFile) {
+      setPreviewUrl('')
+      return undefined
+    }
+
+    const objectUrl = URL.createObjectURL(selectedFile)
+    setPreviewUrl(objectUrl)
+    return () => {
+      if (typeof URL.revokeObjectURL === 'function') {
+        URL.revokeObjectURL(objectUrl)
+      }
+    }
+  }, [selectedFile])
 
   const handleDragOver = (e) => {
     e.preventDefault()
@@ -75,7 +91,7 @@ export function VideoSourceSelector({
             onClick={() => setSourceType('url')}
           >
             <LinkIcon size={15} />
-            <span>Video URL</span>
+            <span>YouTube URL</span>
           </button>
         </div>
       </div>
@@ -121,7 +137,7 @@ export function VideoSourceSelector({
                 className="preview-video"
                 controls
                 preload="metadata"
-                src={URL.createObjectURL(selectedFile)}
+                src={previewUrl || undefined}
               />
 
               <div className="preview-meta">
@@ -160,7 +176,7 @@ export function VideoSourceSelector({
       ) : (
         <div className="url-source-container">
           <label htmlFor="video-url-input" className="url-input-label">
-            Video Stream or Web URL
+            YouTube Video URL
           </label>
           <div className="url-input-wrapper">
             <LinkIcon size={16} className="url-input-icon" />
@@ -168,14 +184,14 @@ export function VideoSourceSelector({
               id="video-url-input"
               type="url"
               className="url-input-field"
-              placeholder="https://example.com/video.mp4"
+              placeholder="https://www.youtube.com/watch?v=..."
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
-              aria-label="Video URL input"
+              aria-label="YouTube URL input"
             />
           </div>
           <p className="setting-helper">
-            Direct MP4 or web stream URL accessible by the server pipeline.
+            Enter a YouTube video page URL. Other web and direct-stream URLs are not supported here yet.
           </p>
         </div>
       )}

@@ -59,7 +59,19 @@ class StorageConfig:
 
     @classmethod
     def from_env(cls) -> "StorageConfig":
-        """Load storage configuration from environment variables."""
+        """Load configuration with deterministic nonblank precedence.
+
+        Each setting prefers its ``S3_*`` name, then its legacy ``R2_*``
+        alias, then the backend default. The endpoint additionally accepts
+        ``S3_ENDPOINT_URL`` after ``S3_ENDPOINT`` and before ``R2_ENDPOINT``.
+        """
+        def first_non_blank(*names: str, default: str = "") -> str:
+            for name in names:
+                value = os.environ.get(name)
+                if value is not None and value.strip():
+                    return value.strip()
+            return default
+
         raw_backend = os.environ.get("STORAGE_BACKEND", "local").strip().lower()
         if raw_backend in ("s3", "aws_s3", "aws"):
             backend = StorageBackend.S3
@@ -72,15 +84,16 @@ class StorageConfig:
         else:
             backend = StorageBackend.LOCAL
 
-        endpoint = os.environ.get(
-            "S3_ENDPOINT",
-            os.environ.get("R2_ENDPOINT", os.environ.get("S3_ENDPOINT_URL", "")),
-        ).strip()
-        region = os.environ.get("S3_REGION", os.environ.get("R2_REGION", "auto" if backend == StorageBackend.R2 else "us-east-1")).strip()
-        bucket = os.environ.get("S3_BUCKET", os.environ.get("R2_BUCKET", "ai-shorts-bucket")).strip()
-        access_key = os.environ.get("S3_ACCESS_KEY_ID", os.environ.get("R2_ACCESS_KEY_ID", "")).strip()
-        secret_key = os.environ.get("S3_SECRET_ACCESS_KEY", os.environ.get("R2_SECRET_ACCESS_KEY", "")).strip()
-        public_url = os.environ.get("S3_PUBLIC_BASE_URL", os.environ.get("R2_PUBLIC_BASE_URL", "")).strip()
+        endpoint = first_non_blank("S3_ENDPOINT", "S3_ENDPOINT_URL", "R2_ENDPOINT")
+        region = first_non_blank(
+            "S3_REGION",
+            "R2_REGION",
+            default="auto" if backend == StorageBackend.R2 else "us-east-1",
+        )
+        bucket = first_non_blank("S3_BUCKET", "R2_BUCKET", default="ai-shorts-bucket")
+        access_key = first_non_blank("S3_ACCESS_KEY_ID", "R2_ACCESS_KEY_ID")
+        secret_key = first_non_blank("S3_SECRET_ACCESS_KEY", "R2_SECRET_ACCESS_KEY")
+        public_url = first_non_blank("S3_PUBLIC_BASE_URL", "R2_PUBLIC_BASE_URL")
 
         try:
             expiry = int(os.environ.get("S3_PRESIGNED_EXPIRY", "3600").strip())
@@ -519,10 +532,12 @@ class S3StorageService(StorageService):
         except Exception as exc:
             if self.enable_local_fallback:
                 logger.warning(
-                    f"S3/R2 upload failed for '{clean_key}' ({exc}). Falling back to local storage."
+                    "S3/R2 upload failed for '%s' (%s). Falling back to local storage.",
+                    clean_key,
+                    type(exc).__name__,
                 )
                 return self.local_fallback.store_file(src, clean_key, content_type=mime)
-            raise StorageError(f"Failed to upload '{clean_key}' to S3/R2 storage: {exc}") from exc
+            raise StorageError(f"Failed to upload '{clean_key}' to S3/R2 storage.") from exc
 
     def store_file(
         self,
@@ -549,9 +564,13 @@ class S3StorageService(StorageService):
             return dest
         except Exception as exc:
             if self.local_fallback.exists(clean_key):
-                logger.warning(f"S3 download failed for '{clean_key}' ({exc}). Reading from local storage fallback.")
+                logger.warning(
+                    "S3 download failed for '%s' (%s). Reading from local storage fallback.",
+                    clean_key,
+                    type(exc).__name__,
+                )
                 return self.local_fallback.download_file(clean_key, dest)
-            raise StorageError(f"Failed to download '{clean_key}' from S3/R2 storage: {exc}") from exc
+            raise StorageError(f"Failed to download '{clean_key}' from S3/R2 storage.") from exc
 
     def get_presigned_url(
         self,

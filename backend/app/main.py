@@ -1,16 +1,14 @@
 import logging
 import os
 from pathlib import Path
-import shutil
-import tempfile
 import time
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Security, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, Security, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import ValidationError
 
@@ -20,12 +18,14 @@ from app.models import (
     SessionResponse,
     ShortsGenerationRequest,
     TokenResponse,
+    UploadAssetResponse,
     User,
     UserCreate,
     UserLogin,
     UserResponse,
     UserRole,
     VideoJobRequest,
+    VideoSourceType,
 )
 from app.services.acceleration_service import default_acceleration_service
 from app.services.auth_service import (
@@ -39,12 +39,23 @@ from app.services.auth_service import (
 from app.services.db import get_database_report
 from app.services.job_runner_service import default_job_runner
 from app.services.job_service import default_job_service
+from app.services.media_access_service import (
+    clear_media_access_cookie,
+    establish_job_owner,
+    owner_directory_name,
+    resolve_media_owner,
+)
+from app.services.media_asset_service import (
+    MediaAssetError,
+    default_media_asset_service,
+)
 from app.services.media_storage_service import default_media_storage
 from app.services.observability import (
     default_metrics_collector,
     get_correlation_id,
     get_request_id,
     log_audit_event,
+    redact_sensitive_data,
     set_correlation_id,
     set_request_id,
     setup_logging,
@@ -58,6 +69,78 @@ logger = logging.getLogger(__name__)
 
 # Create the FastAPI application instance.
 app = FastAPI(title="AI Shorts Generator API")
+
+
+def _public_media_reference(value: str) -> str:
+    """Return a non-sensitive media reference suitable for API responses."""
+    if value.startswith("http://") or value.startswith("https://"):
+        return value
+
+    path = Path(value)
+    if not path.is_absolute():
+        if ".." not in path.parts:
+            return path.as_posix().lstrip("./")
+        return "unavailable"
+
+    for root in (
+        default_media_storage.media_root.resolve(),
+        UPLOAD_DIR.resolve(),
+        Path("downloads").resolve(),
+    ):
+        try:
+            return path.resolve().relative_to(root).as_posix()
+        except ValueError:
+            continue
+    return "unavailable"
+
+
+def _public_job_record(job: JobRecord) -> JobRecord:
+    """Strip internal ownership and host filesystem paths from a job response."""
+    source = job.source
+    if source is not None and source.type == VideoSourceType.UPLOAD:
+        source = source.model_copy(update={"location": None})
+
+    result = job.result
+    if result is not None:
+        public_source = result.source_video.model_copy(
+            update={"file_path": _public_media_reference(result.source_video.file_path)}
+        )
+        public_shorts = []
+        for short in result.generated_shorts:
+            public_shorts.append(short.model_copy(update={
+                "source_clip_path": _public_media_reference(short.source_clip_path),
+                "vertical_clip_path": _public_media_reference(short.vertical_clip_path),
+                "captioned_clip_path": (
+                    _public_media_reference(short.captioned_clip_path)
+                    if short.captioned_clip_path
+                    else None
+                ),
+                "final_file_path": _public_media_reference(short.final_file_path),
+            }))
+        result = result.model_copy(update={
+            "source_video": public_source,
+            "generated_shorts": public_shorts,
+        })
+
+    error = redact_sensitive_data(job.error) if job.error else None
+    if error and (
+        "Traceback (most recent call last)" in error
+        or "\\" in error
+        or "/Users/" in error
+        or "/home/" in error
+    ):
+        error = "Video processing failed."
+
+    return job.model_copy(update={
+        "source": source,
+        "result": result,
+        "error": error,
+    })
+
+
+def _public_diagnostic_error(error: Optional[str], subsystem: str) -> Optional[str]:
+    """Keep operational diagnostics useful without returning provider details."""
+    return f"{subsystem} unavailable." if error else None
 
 # ---------------------------------------------------------------------------
 # Observability Middleware (Request Tracing, Latency Metrics & Error Handling)
@@ -131,7 +214,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = Path("downloads") / "uploads"
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", str(Path("downloads") / "uploads")))
+DEFAULT_MAX_UPLOAD_SIZE_BYTES = 1024 * 1024 * 1024
+UPLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 ALLOWED_MEDIA_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".aac", ".mp3", ".wav", ".srt", ".vtt", ".ass"}
 
@@ -183,13 +268,10 @@ def health_check() -> Dict[str, Any]:
                 "status": "ok" if db_connected else "error",
                 "backend": db_rep.backend,
                 "connected": db_rep.connected,
-                "database_name": db_rep.database_name,
-                "host": db_rep.host,
-                "port": db_rep.port,
                 "migration_version": db_rep.migration_version,
                 "latency_ms": db_rep.latency_ms,
                 "local_fallback_active": db_rep.local_fallback_active,
-                "error": db_rep.error,
+                "error": _public_diagnostic_error(db_rep.error, "Database"),
             },
             "queue": {
                 "status": "ok" if q_connected else "error",
@@ -202,14 +284,12 @@ def health_check() -> Dict[str, Any]:
                 "active_workers_count": q_rep.active_workers_count,
                 "local_fallback_active": q_rep.local_fallback_active,
                 "latency_ms": q_rep.latency_ms,
-                "error": q_rep.error,
+                "error": _public_diagnostic_error(q_rep.error, "Queue"),
             },
             "storage": {
                 "status": "ok",
                 "backend": storage_rep.backend,
                 "configured_backend": storage_rep.configured_backend,
-                "bucket": storage_rep.bucket,
-                "region": storage_rep.region,
                 "is_cloud_active": storage_rep.is_cloud_active,
                 "local_fallback_enabled": storage_rep.local_fallback_enabled,
             },
@@ -254,10 +334,6 @@ def get_storage_status() -> Dict[str, Any]:
     return {
         "backend": report.backend,
         "configured_backend": report.configured_backend,
-        "bucket": report.bucket,
-        "region": report.region,
-        "endpoint_url": report.endpoint_url,
-        "public_base_url": report.public_base_url,
         "is_cloud_active": report.is_cloud_active,
         "local_fallback_enabled": report.local_fallback_enabled,
     }
@@ -271,13 +347,10 @@ def get_database_status() -> Dict[str, Any]:
         "backend": report.backend,
         "configured_backend": report.configured_backend,
         "connected": report.connected,
-        "database_name": report.database_name,
-        "host": report.host,
-        "port": report.port,
         "migration_version": report.migration_version,
         "latency_ms": report.latency_ms,
         "local_fallback_active": report.local_fallback_active,
-        "error": report.error,
+        "error": _public_diagnostic_error(report.error, "Database"),
     }
 
 
@@ -296,7 +369,7 @@ def get_queue_status() -> Dict[str, Any]:
         "active_workers_count": report.active_workers_count,
         "local_fallback_active": report.local_fallback_active,
         "latency_ms": report.latency_ms,
-        "error": report.error,
+        "error": _public_diagnostic_error(report.error, "Queue"),
     }
 
 
@@ -392,12 +465,14 @@ def refresh_token(
 @app.post("/api/auth/logout")
 def logout(
     request: Request,
+    response: Response,
     credentials: Optional[HTTPAuthorizationCredentials] = Security(security_bearer),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Logout endpoint: revokes access token JTI and invalidates user sessions."""
     raw_token = credentials.credentials if credentials else None
     default_auth_service.logout_user(raw_token, current_user)
+    clear_media_access_cookie(response)
     log_audit_event(
         action="auth.logout",
         status="success",
@@ -467,61 +542,97 @@ def admin_list_users(
 # ---------------------------------------------------------------------------
 
 
-@app.post("/api/upload")
+def _max_upload_size_bytes() -> int:
+    raw_value = os.environ.get("MAX_UPLOAD_SIZE_BYTES", str(DEFAULT_MAX_UPLOAD_SIZE_BYTES)).strip()
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_MAX_UPLOAD_SIZE_BYTES
+    return value if value > 0 else DEFAULT_MAX_UPLOAD_SIZE_BYTES
+
+
+@app.post("/api/upload", response_model=UploadAssetResponse)
 async def upload_video(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
     current_user: Optional[User] = Depends(get_optional_user),
-) -> Dict[str, Any]:
+) -> UploadAssetResponse:
     """Securely upload a video file for local processing."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided in upload")
 
-    original_ext = Path(file.filename).suffix.lower()
+    original_filename = file.filename.replace("\\", "/").split("/")[-1]
+    original_ext = Path(original_filename).suffix.lower()
     if original_ext not in ALLOWED_VIDEO_EXTENSIONS:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file format '{original_ext}'. Allowed formats: {', '.join(sorted(ALLOWED_VIDEO_EXTENSIONS))}",
         )
 
-    # If authenticated, isolate upload in user-scoped subdirectory
-    user_prefix = current_user.user_id if current_user else "anonymous"
-    user_upload_dir = UPLOAD_DIR / user_prefix
+    owner_id = establish_job_owner(request, response, current_user)
+    user_upload_dir = UPLOAD_DIR / owner_directory_name(owner_id)
     user_upload_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = f"upload_{uuid4().hex}{original_ext}"
+    safe_name = f"asset_{uuid4().hex}{original_ext}"
     dest_path = user_upload_dir / safe_name
 
+    file_size = 0
+    max_upload_size = _max_upload_size_bytes()
     try:
         with dest_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            while chunk := await file.read(UPLOAD_CHUNK_SIZE_BYTES):
+                file_size += len(chunk)
+                if file_size > max_upload_size:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Uploaded file exceeds the maximum size of {max_upload_size} bytes.",
+                    )
+                buffer.write(chunk)
+    except HTTPException:
+        dest_path.unlink(missing_ok=True)
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {exc}") from exc
+        dest_path.unlink(missing_ok=True)
+        logger.error("Upload write failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to save uploaded file") from exc
 
-    file_size = dest_path.stat().st_size
     if file_size == 0:
         dest_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes)")
+
+    try:
+        asset = default_media_asset_service.create_asset(
+            owner_id=owner_id,
+            stored_path=dest_path,
+            original_filename=original_filename,
+            size_bytes=file_size,
+        )
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Failed to register uploaded asset") from exc
 
     default_metrics_collector.record_storage_operation("upload", bytes_count=file_size, success=True)
     log_audit_event(
         action="media.upload",
         status="success",
-        user_id=user_prefix,
+        user_id=owner_id,
         resource_id=safe_name,
         details={"file_size_bytes": file_size, "filename": file.filename},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
 
-    return {
-        "file_path": str(dest_path.resolve()),
-        "filename": file.filename,
-        "file_size_bytes": file_size,
-    }
+    return UploadAssetResponse(
+        asset_id=asset.asset_id,
+        filename=asset.original_filename,
+        file_size_bytes=file_size,
+        created_at=asset.created_at,
+    )
 
 
 @app.get("/api/media")
 def get_media(
+    request: Request,
     file_path: Optional[str] = Query(None, description="Path or relative path to the generated media file"),
     path: Optional[str] = Query(None, description="Alternative query param for relative media path"),
     current_user: Optional[User] = Depends(get_optional_user),
@@ -531,20 +642,15 @@ def get_media(
     if not target or not target.strip():
         raise HTTPException(status_code=400, detail="Media file path query parameter is required")
 
-    # If target is an S3 signed URL, redirect to cloud storage
-    if target.startswith("http://") or target.startswith("https://"):
-        return RedirectResponse(url=target)
-
     try:
         raw_path = Path(target)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid media file path")
 
-    approved_roots = [
-        default_media_storage.media_root.resolve(),
-        Path("downloads").resolve(),
-        Path(tempfile.gettempdir()).resolve(),
-    ]
+    media_root = default_media_storage.media_root.resolve()
+    upload_root = UPLOAD_DIR.resolve()
+    downloads_root = Path("downloads").resolve()
+    approved_roots = [media_root, upload_root, downloads_root]
 
     resolved_path: Optional[Path] = None
 
@@ -576,20 +682,37 @@ def get_media(
     if not resolved_path.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
 
-    # IDOR / User media isolation check: if path contains `jobs/{job_id}`, verify user ownership
-    path_str = resolved_path.as_posix()
-    if "/jobs/" in path_str:
+    media_owner = resolve_media_owner(request, current_user)
+    try:
+        relative_media_path = resolved_path.relative_to(media_root)
+    except ValueError:
+        relative_media_path = None
+
+    if relative_media_path is not None:
+        parts = relative_media_path.parts
+        if len(parts) < 3 or parts[0] != "jobs":
+            raise HTTPException(status_code=403, detail="Media must belong to a job.")
+        job = default_job_service.get_job(parts[1])
+        if job is None:
+            raise HTTPException(status_code=404, detail="Media job not found")
+        if not job.user_id or media_owner != job.user_id:
+            raise HTTPException(status_code=403, detail="Forbidden: You do not own this media artifact.")
+    else:
         try:
-            parts = path_str.split("/jobs/")[1].split("/")
-            job_id = parts[0]
-            job = default_job_service.get_job(job_id)
-            if job and job.user_id:
-                if not current_user or current_user.user_id != job.user_id:
-                    raise HTTPException(status_code=403, detail="Forbidden: You do not own this media artifact.")
-        except HTTPException:
-            raise
-        except Exception:
-            pass
+            relative_upload_path = resolved_path.relative_to(upload_root)
+        except ValueError:
+            try:
+                relative_download_path = resolved_path.relative_to(downloads_root)
+            except ValueError:
+                raise HTTPException(status_code=403, detail="Access to the specified media path is forbidden")
+            owner_parts = relative_download_path.parts[1:] if (
+                relative_download_path.parts and relative_download_path.parts[0] == "uploads"
+            ) else ()
+        else:
+            owner_parts = relative_upload_path.parts
+
+        if not media_owner or len(owner_parts) < 2 or owner_parts[0] != owner_directory_name(media_owner):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not own this uploaded media.")
 
     if resolved_path.suffix.lower() not in ALLOWED_MEDIA_EXTENSIONS:
         raise HTTPException(status_code=403, detail="Forbidden media file type")
@@ -613,20 +736,25 @@ def get_media(
 
 
 @app.get("/api/jobs", response_model=List[JobRecord])
-def list_jobs(current_user: Optional[User] = Depends(get_optional_user)) -> List[JobRecord]:
-    """List jobs scoped to the current user (or legacy/all jobs if unauthenticated)."""
-    user_id = current_user.user_id if current_user else None
-    return default_job_service.list_jobs(user_id=user_id)
+def list_jobs(
+    request: Request,
+    response: Response,
+    current_user: Optional[User] = Depends(get_optional_user),
+) -> List[JobRecord]:
+    """List jobs scoped to the authenticated user or anonymous browser session."""
+    owner_id = establish_job_owner(request, response, current_user)
+    return [_public_job_record(job) for job in default_job_service.list_jobs(user_id=owner_id)]
 
 
 @app.post("/api/jobs", response_model=JobRecord)
 def create_job(
     request: Request,
+    response: Response,
     payload: Dict[str, Any],
     current_user: Optional[User] = Depends(get_optional_user),
 ) -> JobRecord:
     """Create and submit a new background shorts generation job attached to current user."""
-    user_id = current_user.user_id if current_user else None
+    user_id = establish_job_owner(request, response, current_user)
     if "clip_duration_seconds" in payload:
         try:
             data = {**payload, "user_id": user_id}
@@ -645,6 +773,25 @@ def create_job(
         except ValidationError as exc:
             raise RequestValidationError(errors=exc.errors()) from exc
 
+    if shorts_req.source.type == VideoSourceType.UPLOAD:
+        asset_id = shorts_req.source.asset_id
+        if not asset_id or shorts_req.source.location is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="Upload jobs must reference an asset_id returned by /api/upload.",
+            )
+        asset = default_media_asset_service.get_asset(asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="Uploaded asset was not found.")
+        if asset.owner_id != user_id:
+            raise HTTPException(status_code=403, detail="Forbidden: You do not own this uploaded asset.")
+        try:
+            default_media_asset_service.resolve_owned_asset(asset_id, user_id)
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Forbidden: You do not own this uploaded asset.")
+        except MediaAssetError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     job_record = default_job_service.create_job(shorts_req, user_id=user_id)
     default_job_runner.submit_job(job_record.job_id, shorts_req)
     default_metrics_collector.record_job_event("created")
@@ -659,12 +806,14 @@ def create_job(
         user_agent=request.headers.get("user-agent"),
     )
 
-    return job_record
+    return _public_job_record(job_record)
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobRecord)
 def get_job(
     job_id: str,
+    request: Request,
+    response: Response,
     current_user: Optional[User] = Depends(get_optional_user),
 ) -> JobRecord:
     """Retrieve an existing job, verifying user ownership to prevent IDOR vulnerabilities."""
@@ -672,18 +821,18 @@ def get_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # If job is owned by a user, enforce that requester matches owner
-    if job.user_id:
-        if not current_user or current_user.user_id != job.user_id:
-            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job.")
+    owner_id = establish_job_owner(request, response, current_user)
+    if not job.user_id or owner_id != job.user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job.")
 
-    return job
+    return _public_job_record(job)
 
 
 @app.delete("/api/jobs/{job_id}")
 def delete_job(
     job_id: str,
     request: Request,
+    response: Response,
     current_user: Optional[User] = Depends(get_optional_user),
 ) -> Dict[str, Any]:
     """Delete a job record and associated media artifacts, ensuring only the owner can delete it."""
@@ -691,17 +840,17 @@ def delete_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.user_id and (not current_user or current_user.user_id != job.user_id):
+    owner_id = establish_job_owner(request, response, current_user)
+    if not job.user_id or owner_id != job.user_id:
         raise HTTPException(status_code=403, detail="Forbidden: You cannot delete another user's job.")
 
-    user_id = current_user.user_id if current_user else None
-    default_job_service.delete_job(job_id, user_id=user_id)
+    default_job_service.delete_job(job_id, user_id=owner_id)
     default_media_storage.delete_job_media(job_id)
 
     log_audit_event(
         action="job.delete",
         status="success",
-        user_id=user_id,
+        user_id=owner_id,
         resource_id=job_id,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),

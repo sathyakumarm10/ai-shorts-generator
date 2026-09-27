@@ -27,9 +27,10 @@ from app.models import (
     VideoSource,
     VideoSourceType,
 )
-from app.services.job_runner_service import JobRunnerService
+from app.services.job_runner_service import JobRunnerService, default_job_runner
 from app.services.job_service import default_job_service
 from app.services.media_storage_service import default_media_storage
+from app.services.media_executable_config import resolve_ffprobe_executable
 from app.services.shorts_generation_service import ShortsGenerationService
 
 REAL_VIDEO_PATH = Path("downloads/uploads/real_source_video.mp4")
@@ -41,7 +42,7 @@ def probe_video_playable(video_path: Path) -> dict:
     assert video_path.stat().st_size > 0, f"Video file is empty (0 bytes): {video_path}"
 
     cmd = [
-        "ffprobe",
+        resolve_ffprobe_executable(),
         "-v", "error",
         "-show_entries", "format=duration,size:stream=codec_name,codec_type,width,height",
         "-of", "default=noprint_wrappers=1",
@@ -56,15 +57,25 @@ def probe_video_playable(video_path: Path) -> dict:
 
 @pytest.mark.skipif(not REAL_VIDEO_PATH.is_file(), reason="Real video file not found in downloads directory")
 class TestRealVideoWorkflow:
+    client = TestClient(app)
+
     def test_real_video_playable_before_processing(self):
         """Verify the input source video is a valid playable MP4."""
         meta = probe_video_playable(REAL_VIDEO_PATH)
         assert meta["size"] > 100000
 
-    def test_real_multi_short_pipeline_execution(self):
+    def test_real_multi_short_pipeline_execution(self, monkeypatch):
         """Execute the real pipeline on the real video requesting up to 10 shorts."""
+        with REAL_VIDEO_PATH.open("rb") as source_file:
+            upload_response = self.client.post(
+                "/api/upload",
+                files={"file": (REAL_VIDEO_PATH.name, source_file, "video/mp4")},
+            )
+        assert upload_response.status_code == 200
+        asset_id = upload_response.json()["asset_id"]
+
         req = ShortsGenerationRequest(
-            source=VideoSource(type=VideoSourceType.UPLOAD, location=str(REAL_VIDEO_PATH.resolve())),
+            source=VideoSource(type=VideoSourceType.UPLOAD, asset_id=asset_id),
             number_of_clips=10,
             clip_duration_seconds=30.0,
             min_clip_duration=30.0,
@@ -76,11 +87,21 @@ class TestRealVideoWorkflow:
             vertical_height=1920,
         )
 
-        job_record = default_job_service.create_job(req)
+        monkeypatch.setattr(default_job_runner, "submit_job", lambda *args, **kwargs: None)
+        create_response = self.client.post(
+            "/api/jobs",
+            json=req.model_dump(mode="json", exclude={"user_id"}),
+        )
+        assert create_response.status_code == 200
+        job_record = default_job_service.get_job(create_response.json()["job_id"])
+        assert job_record is not None
         runner = JobRunnerService()
 
         # Run pipeline directly
-        runner.execute_job_pipeline(job_record.job_id, req)
+        runner.execute_job_pipeline(
+            job_record.job_id,
+            req.model_copy(update={"user_id": job_record.user_id}),
+        )
 
         # Retrieve completed job
         completed_job = default_job_service.get_job(job_record.job_id)
@@ -119,8 +140,7 @@ class TestRealVideoWorkflow:
 
     def test_api_serves_real_job_and_media(self):
         """Verify TestClient can retrieve the completed job and stream the real MP4."""
-        client = TestClient(app)
-        jobs_res = client.get("/api/jobs")
+        jobs_res = self.client.get("/api/jobs")
         assert jobs_res.status_code == 200
         jobs = jobs_res.json()
         assert len(jobs) > 0
@@ -141,7 +161,7 @@ class TestRealVideoWorkflow:
         file_path = short["final_file_path"]
 
         # Stream media asset through API
-        media_res = client.get(f"/api/media?file_path={file_path}")
+        media_res = self.client.get(f"/api/media?file_path={file_path}")
         assert media_res.status_code == 200
         assert media_res.headers.get("content-type") == "video/mp4"
         assert len(media_res.content) > 1000

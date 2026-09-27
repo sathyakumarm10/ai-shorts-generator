@@ -11,6 +11,30 @@ from app.models import JobRecord, JobStatus, User
 from app.services.job_sqlite import SQLiteJobStore
 from app.services.user_sqlite import SQLiteUserStore
 
+
+def test_failed_sqlite_migration_rolls_back_and_is_not_recorded(monkeypatch):
+    from app.services import db_migrations
+
+    conn = sqlite3.connect(":memory:")
+    monkeypatch.setattr(
+        db_migrations,
+        "MIGRATIONS",
+        [(99, "broken_migration", ["CREATE TABLE partial_table (id TEXT);", "INVALID SQL"], [])],
+    )
+
+    with pytest.raises(sqlite3.Error):
+        db_migrations.run_sqlite_migrations(conn)
+
+    recorded = conn.execute(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 99"
+    ).fetchone()[0]
+    partial_table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'partial_table'"
+    ).fetchone()
+    assert recorded == 0
+    assert partial_table is None
+    conn.close()
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

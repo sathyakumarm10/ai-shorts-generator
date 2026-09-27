@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Plus, Trash2, Save, AlertCircle, CheckCircle, Info, Clock, Play } from 'lucide-react'
+import { Plus, Trash2, Eye, AlertCircle, CheckCircle, Info, Play } from 'lucide-react'
 import {
   validateCaptionTrack,
   checkSubtitleLineLength,
@@ -87,10 +87,10 @@ export function SubtitleEditor({
         await onSaveTrack({ segments })
       }
       setSaveStatus('saved')
-      setSaveMessage('Subtitles updated in workspace. (Persistence requires a backend endpoint)')
+      setSaveMessage('Preview draft updated locally. The exported video is unchanged.')
     } catch (err) {
       setSaveStatus('error')
-      setSaveMessage(err?.message || 'Failed to save subtitles.')
+      setSaveMessage(err?.message || 'Failed to update the preview draft.')
     }
   }
 
@@ -103,6 +103,9 @@ export function SubtitleEditor({
           <h3 className="editor-title">Subtitle Track</h3>
           <p className="editor-subtitle">
             {segments.length} {segments.length === 1 ? 'segment' : 'segments'} &bull; Synchronized
+          </p>
+          <p className="setting-helper">
+            Local preview draft only. Edits are not saved after reload and are not applied to the exported video.
           </p>
         </div>
 
@@ -123,8 +126,8 @@ export function SubtitleEditor({
             onClick={handleSave}
             disabled={saveStatus === 'saving' || !validation.isValid}
           >
-            <Save size={14} />
-            <span>{saveStatus === 'saving' ? 'Saving...' : 'Save Subtitles'}</span>
+            <Eye size={14} />
+            <span>{saveStatus === 'saving' ? 'Updating...' : 'Update Preview Draft'}</span>
           </button>
         </div>
       </div>
